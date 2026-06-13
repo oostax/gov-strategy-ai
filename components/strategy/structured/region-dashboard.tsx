@@ -51,20 +51,32 @@ export function RegionDashboard({ data }: { data: RegionAnalysisOutput }) {
         </div>
       )}
 
-      {/* Карта ЛПР */}
-      <div id="stakeholders" className="scroll-mt-56">
-        <StakeholderSection stakeholders={data.stakeholderMap} />
-      </div>
-
-      {/* Конкурентный ландшафт */}
-      <div id="competition" className="scroll-mt-56">
-        <CompetitionSection competitors={data.competitiveLandscape} />
-      </div>
-
-      {/* Точки входа */}
-      <div id="entry-points" className="scroll-mt-56">
-        <EntryPointsSection entryPoints={data.entryPoints} />
-      </div>
+      {/* Заход Сбера: sales-блоки свёрнуты по умолчанию, чтобы информационный срез читался чисто */}
+      {(data.stakeholderMap?.length > 0 ||
+        data.competitiveLandscape?.length > 0 ||
+        data.entryPoints?.length > 0) && (
+        <details className="group rounded-2xl border bg-card">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 p-4">
+            <span className="flex items-center gap-2 text-sm font-semibold">
+              <Target className="size-4 text-muted-foreground" />
+              Заход Сбера: ЛПР, конкуренты, точки входа
+            </span>
+            <span className="text-xs text-muted-foreground group-open:hidden">Показать</span>
+            <span className="hidden text-xs text-muted-foreground group-open:inline">Скрыть</span>
+          </summary>
+          <div className="space-y-4 border-t p-4">
+            <div id="stakeholders" className="scroll-mt-56">
+              <StakeholderSection stakeholders={data.stakeholderMap} />
+            </div>
+            <div id="competition" className="scroll-mt-56">
+              <CompetitionSection competitors={data.competitiveLandscape} />
+            </div>
+            <div id="entry-points" className="scroll-mt-56">
+              <EntryPointsSection entryPoints={data.entryPoints} />
+            </div>
+          </div>
+        </details>
+      )}
 
       {/* Информационные пробелы */}
       <div id="data-gaps" className="scroll-mt-56">
