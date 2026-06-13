@@ -33,25 +33,61 @@ export default function StructuredSessionPage() {
   async function generate(prompt = "") {
     setLoading(true);
     try {
+      // Генерация fire-and-forget: сервер отвечает сразу и считает в фоне.
       const response = await fetch("/api/generate/structured", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId, prompt }),
       });
       const data = (await response.json()) as {
+        status?: string;
         output?: TypedOutput;
         error?: string;
       };
-      if (!response.ok || !data.output) {
+      if (!response.ok) {
         throw new Error(data.error || "Генерация не удалась");
       }
-      setOutput(data.output);
-      toast.success("Материал сформирован");
+      // Если результат вернулся сразу — показываем; иначе поллим GET-эндпоинт.
+      if (data.output) {
+        setOutput(data.output);
+        toast.success("Материал сформирован");
+        return;
+      }
+      await pollForResult();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Ошибка генерации");
-    } finally {
       setLoading(false);
     }
+  }
+
+  // Поллим GET /api/sessions/{id}, пока не появится structuredOutput или generationError.
+  async function pollForResult() {
+    const maxAttempts = 90; // ~3 мин при интервале 2с
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        const r = await fetch(`/api/sessions/${sessionId}`);
+        const d = (await r.json()) as {
+          structuredOutput?: TypedOutput | null;
+          generationError?: string | null;
+        };
+        if (d.generationError) {
+          throw new Error(d.generationError);
+        }
+        if (d.structuredOutput) {
+          setOutput(d.structuredOutput);
+          toast.success("Материал сформирован");
+          setLoading(false);
+          return;
+        }
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Ошибка генерации");
+        setLoading(false);
+        return;
+      }
+    }
+    toast.error("Генерация заняла слишком много времени. Попробуйте пересобрать.");
+    setLoading(false);
   }
 
   if (initialLoading) {
