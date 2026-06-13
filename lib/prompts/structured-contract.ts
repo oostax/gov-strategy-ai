@@ -305,6 +305,7 @@ export const regionAnalysisContract = `Верни ТОЛЬКО валидный 
       "id": "ind_1",
       "name": "Отрасль (сельское хозяйство, туризм, порты, IT...)",
       "shareInGDP": "Доля в ВРП (если известна) или 'нужно снять'",
+      "shareValue": 0,
       "keyPlayers": "Ключевые предприятия/организации",
       "currentDigitalState": "Что уже цифровизировано, у кого какие системы",
       "painPoints": ["Конкретная боль 1", "Конкретная боль 2"],
@@ -316,12 +317,18 @@ export const regionAnalysisContract = `Верни ТОЛЬКО валидный 
   "budgetLandscape": {
     "totalBudget": "Общий бюджет (если известен)",
     "itShare": "Доля ИТ/цифровизации (если известна)",
+    "totalIncomeValue": 0,
+    "totalExpenseValue": 0,
+    "breakdown": [
+      { "id": "b_1", "name": "Образование", "kind": "expense", "value": 0, "unit": "млрд ₽", "share": "22%" }
+    ],
     "keyPrograms": [
       {
         "id": "prog_1",
         "name": "Название программы",
         "owner": "Кто курирует",
         "budget": "Объём (если известен)",
+        "budgetValue": 0,
         "status": "действует / завершается / планируется",
         "sberRelevance": "Как это связано с Сбером"
       }
