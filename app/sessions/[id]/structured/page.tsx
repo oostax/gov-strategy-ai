@@ -24,8 +24,9 @@ export default function StructuredSessionPage() {
   useEffect(() => {
     fetch(`/api/sessions/${sessionId}`)
       .then((r) => r.json())
-      .then((data: { session?: SessionProfile }) => {
+      .then((data: { session?: SessionProfile; structuredOutput?: TypedOutput | null }) => {
         if (data.session) setSession(data.session);
+        if (data.structuredOutput) setOutput(data.structuredOutput);
       })
       .finally(() => setInitialLoading(false));
   }, [sessionId]);
