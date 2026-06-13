@@ -18,6 +18,10 @@ import type { RegionAnalysisOutput } from "@/lib/schemas/structured-output";
 import { RisksPanel } from "./risks-panel";
 import { NextStepsBar } from "./next-steps-bar";
 import { SourcesFooter } from "./sources-footer";
+import { VisualsSection } from "./visuals-section";
+
+// Показываем блок только если в нём есть содержание — никакой воды и пустых заголовков.
+const hasNum = (n: unknown): n is number => Number.isFinite(n);
 
 export function RegionDashboard({ data }: { data: RegionAnalysisOutput }) {
   return (
@@ -39,6 +43,13 @@ export function RegionDashboard({ data }: { data: RegionAnalysisOutput }) {
       <div id="priorities" className="scroll-mt-56">
         <PrioritiesSection priorities={data.strategicPriorities} />
       </div>
+
+      {/* Инфографика из реальных чисел (доли ВРП, структура бюджета) */}
+      {data.visuals && data.visuals.length > 0 && (
+        <div id="visuals" className="scroll-mt-56">
+          <VisualsSection visuals={data.visuals} />
+        </div>
+      )}
 
       {/* Карта ЛПР */}
       <div id="stakeholders" className="scroll-mt-56">
