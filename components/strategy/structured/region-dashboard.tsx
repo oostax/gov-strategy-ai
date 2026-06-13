@@ -287,6 +287,28 @@ function PrioritiesSection({ priorities }: { priorities: RegionAnalysisOutput["s
             </ul>
           </div>
         )}
+        {priorities.roadmap && priorities.roadmap.length > 0 && (
+          <div className="mt-4 border-t pt-3">
+            <p className="mb-2 text-xs font-semibold text-muted-foreground">
+              Горизонт 5 лет:
+            </p>
+            <div className="space-y-2">
+              {priorities.roadmap.map((item) => (
+                <div key={item.id} className="flex gap-3">
+                  <span className="mt-0.5 shrink-0 rounded-md bg-primary/10 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-primary">
+                    {item.period}
+                  </span>
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium leading-snug">{item.title}</p>
+                    {item.linkedProgram && (
+                      <p className="text-[10px] text-muted-foreground">Связь: {item.linkedProgram}</p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         {priorities.source && (
           <p className="mt-2 text-[10px] text-muted-foreground">Источник: {priorities.source}</p>
         )}
