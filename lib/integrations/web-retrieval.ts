@@ -138,21 +138,27 @@ function buildQueries(region?: string, focusTopic?: string): string[] {
   queries.push(`${rq}${topic} ${year}`.trim());
   queries.push(`${rq}${topic} ${prevYear} ${year} итоги результаты`.trim());
 
-  // 2. Бюджет региона — критически важно для госсектора
+  // 2. Бюджет региона — критически важно для госсектора.
+  // Региональные .ru-сайты часто блокируют прямой доступ, поэтому целимся
+  // и в доступные зеркала первоисточников (pravo.gov.ru, consultant, garant, СМИ).
   if (regionStr) {
-    queries.push(`${rq}бюджет ${year} расходы доходы структура`);
-    queries.push(`${rq}бюджет ${prevYear} ${year} итоги`);
+    queries.push(`${rq}бюджет ${year} расходы доходы структура млрд`);
+    queries.push(`${rq}закон о бюджете ${prevYear} ${year} доходы расходы дефицит`);
+    queries.push(`${rq}бюджет ${year} структура расходов образование здравоохранение`);
   }
 
-  // 3. Стратегия / приоритеты региона
+  // 3. Стратегия / приоритеты региона — целимся в текст стратегии (закон/документ).
   if (regionStr) {
-    queries.push(`${rq}стратегия социально-экономического развития до 2030`);
+    queries.push(`${rq}стратегия социально-экономического развития до 2030 приоритеты`);
+    queries.push(`${rq}закон стратегия социально-экономического развития цели`);
     queries.push(`${rq}губернатор приоритеты национальные проекты ${year}`);
   }
 
-  // 4. Статистика / ВРП / промышленность
+  // 4. Статистика / ВРП / отраслевая структура.
+  // Wikipedia (ru) — доступный машиночитаемый источник долей ВРП и отраслей.
   if (regionStr) {
-    queries.push(`${rq}ВРП структура экономики отрасли ${year}`);
+    queries.push(`${rq}ВРП структура экономики доли отраслей процент`);
+    queries.push(`${rq}википедия экономика ВРП население ${year}`);
     queries.push(`${rq}промышленность сельское хозяйство статистика ${year}`);
   }
 
@@ -203,14 +209,59 @@ function isUsefulSnippet(snippet: string) {
   return snippet.trim().length >= 120 && !/javascript|cookie|captcha/i.test(snippet);
 }
 
-// ── Опциональный реальный search-API (Tavily / Serper) ───────────────────────
-// Главный рычаг качества: если задан ключ, поиск идёт через нормальный API,
-// а не через скрейпинг. Без ключа — старый скрейпинг-контур (см. ниже).
+// ── Реальный search-API (SearXNG self-hosted / Tavily / Serper) ──────────────
+// Главный рычаг качества: если задан провайдер, поиск идёт через нормальный API,
+// а не через скрейпинг. Приоритет — бесплатный self-hosted SearXNG (агрегатор
+// Google/Bing/DDG без ключей и лимитов). Без провайдера — скрейпинг-контур ниже.
 function hasSearchProvider() {
-  return Boolean(process.env.TAVILY_API_KEY || process.env.SERPER_API_KEY);
+  return Boolean(
+    process.env.SEARXNG_URL || process.env.TAVILY_API_KEY || process.env.SERPER_API_KEY,
+  );
+}
+
+// SearXNG: бесплатный self-hosted метапоисковик. JSON API: GET /search?format=json.
+// Возвращает агрегированную выдачу нескольких движков → выше шанс найти цифры
+// и первоисточники (законы о бюджете, стратегии СЭР, открытый бюджет региона).
+async function searxngSearch(query: string, limit: number): Promise<WebEvidence[]> {
+  const base = (process.env.SEARXNG_URL || "").replace(/\/$/, "");
+  if (!base) return [];
+  try {
+    const url = `${base}/search?q=${encodeURIComponent(query)}&format=json&language=ru&safesearch=0`;
+    const res = await fetch(url, {
+      headers: { Accept: "application/json", "User-Agent": "gov-strategy-ai/1.0" },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return [];
+    const data = (await res.json()) as {
+      results?: Array<{
+        title?: string;
+        url?: string;
+        content?: string;
+        publishedDate?: string;
+      }>;
+    };
+    return (data.results ?? [])
+      .filter((r) => r.url && /^https?:\/\//.test(r.url))
+      .slice(0, Math.max(limit, 10))
+      .map((r) => ({
+        title: r.title ?? sourceFromUrl(r.url as string),
+        url: r.url as string,
+        snippet: (r.content ?? "").replace(/\s+/g, " ").trim().slice(0, 700),
+        source: sourceFromUrl(r.url as string),
+        query,
+        fetchedAt: r.publishedDate || new Date().toISOString(),
+      }));
+  } catch (err) {
+    console.warn(`[web-retrieval] SearXNG failed: ${err instanceof Error ? err.message : err}`);
+    return [];
+  }
 }
 
 async function providerSearch(query: string, limit: number): Promise<WebEvidence[]> {
+  // SearXNG — приоритетный бесплатный провайдер.
+  const searx = await searxngSearch(query, limit);
+  if (searx.length) return searx;
+
   const tavily = process.env.TAVILY_API_KEY;
   if (tavily) {
     try {
