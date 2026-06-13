@@ -122,12 +122,18 @@ function RegionHero({ summary }: { summary: RegionAnalysisOutput["regionSummary"
 }
 
 function MiniBlock({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) {
+  // «нужно снять» / пусто — это пробел в данных, а не факт: показываем приглушённо.
+  const isGap = !value?.trim() || /нужно снять|уточн|неизвестн/i.test(value);
   return (
     <div className="flex gap-3 p-4">
       <span className="mt-0.5 shrink-0">{icon}</span>
       <div className="min-w-0">
         <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
-        <p className="text-sm leading-snug">{value}</p>
+        {isGap ? (
+          <p className="text-sm italic leading-snug text-muted-foreground/60">данных нет</p>
+        ) : (
+          <p className="text-sm font-medium leading-snug">{value}</p>
+        )}
       </div>
     </div>
   );

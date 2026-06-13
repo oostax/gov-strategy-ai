@@ -39,7 +39,7 @@ export function StructuredDashboard({ output }: { output: TypedOutput }) {
   if (output.kind === "region") {
     return (
       <div className="space-y-5">
-        <ExecutiveHints kind="strategy" />
+        <ExecutiveHints kind="region" />
         <RegionDashboard data={output.data as RegionAnalysisOutput} />
       </div>
     );
