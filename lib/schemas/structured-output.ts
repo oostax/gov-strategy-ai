@@ -260,6 +260,8 @@ export interface IndustryBreakdown {
   painPoints: string[];
   sberRelevance: string;
   dataNeeded: string;
+  // Опционально — числовая доля в ВРП (%) для инфографики. Только из источника.
+  shareValue?: number;
 }
 
 export interface BudgetProgram {
@@ -269,6 +271,18 @@ export interface BudgetProgram {
   budget: string;
   status: string;
   sberRelevance: string;
+  // Опционально — числовой объём программы (млрд ₽) для диаграммы. Только из источника.
+  budgetValue?: number;
+}
+
+// Статья структуры бюджета (доход или расход) для диаграммы.
+export interface BudgetBreakdownItem {
+  id: string;
+  name: string;
+  kind: "income" | "expense";
+  value: number;
+  unit?: string;
+  share?: string;
 }
 
 export interface BudgetLandscape {
@@ -277,6 +291,10 @@ export interface BudgetLandscape {
   keyPrograms: BudgetProgram[];
   upcomingTenders: string;
   dataNeeded: string;
+  // Опционально — структура доходов/расходов в числах для диаграммы. Только из источника.
+  breakdown?: BudgetBreakdownItem[];
+  totalIncomeValue?: number;
+  totalExpenseValue?: number;
 }
 
 export interface RegionStakeholder {
@@ -318,6 +336,15 @@ export interface DataGap {
   owner: string;
 }
 
+// Приоритет региона на горизонте 5 лет (для дорожной карты приоритетов).
+export interface PriorityHorizon {
+  id: string;
+  title: string;
+  period: string;
+  linkedProgram?: string;
+  source?: string;
+}
+
 export interface RegionAnalysisOutput {
   regionSummary: RegionSummary;
   industryBreakdown: IndustryBreakdown[];
@@ -329,6 +356,8 @@ export interface RegionAnalysisOutput {
     confirmed: string[];
     hypothesized: string[];
     source: string;
+    // Опционально — приоритеты на горизонт 5 лет с периодом и привязкой к нацпроектам.
+    roadmap?: PriorityHorizon[];
   };
   dataGaps: DataGap[];
   risks: Risk[];
