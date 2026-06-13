@@ -143,6 +143,14 @@ function IndustrySection({ items }: { items: RegionAnalysisOutput["industryBreak
                   </span>
                 )}
               </div>
+              {hasNum(item.shareValue) && (
+                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary/70"
+                    style={{ width: `${Math.max(2, Math.min(100, item.shareValue as number))}%` }}
+                  />
+                </div>
+              )}
               {item.keyPlayers && (
                 <p className="mt-1 text-xs text-muted-foreground">Ключевые игроки: {item.keyPlayers}</p>
               )}
@@ -192,6 +200,34 @@ function BudgetSection({ landscape }: { landscape: RegionAnalysisOutput["budgetL
             </div>
           )}
         </div>
+        {(() => {
+          const expenses = (landscape.breakdown ?? [])
+            .filter((b) => b.kind === "expense" && hasNum(b.value))
+            .sort((a, b) => (b.value as number) - (a.value as number));
+          if (expenses.length < 2) return null;
+          const max = Math.max(...expenses.map((e) => e.value as number), 1);
+          return (
+            <div className="mb-3 rounded-xl border bg-muted/10 p-3">
+              <p className="mb-2 text-xs font-semibold text-muted-foreground">Структура расходов:</p>
+              <div className="space-y-1.5">
+                {expenses.map((e) => (
+                  <div key={e.id} className="flex items-center gap-2">
+                    <span className="w-32 shrink-0 truncate text-[11px]">{e.name}</span>
+                    <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+                      <div
+                        className="h-full rounded-full bg-emerald-500/70"
+                        style={{ width: `${Math.max(3, Math.round(((e.value as number) / max) * 100))}%` }}
+                      />
+                    </div>
+                    <span className="w-20 shrink-0 text-right text-[11px] font-medium tabular-nums">
+                      {(e.value as number).toLocaleString("ru-RU")} {e.unit ?? "млрд ₽"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
         {landscape.keyPrograms?.length > 0 && (
           <div className="space-y-2">
             <p className="text-xs font-semibold text-muted-foreground">Ключевые программы:</p>
