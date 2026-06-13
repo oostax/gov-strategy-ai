@@ -1,0 +1,22 @@
+wing: gov_strategy_ai
+rooms:
+- name: app
+  description: Files from app/
+- name: frontend
+  description: Files from components/
+- name: public
+  description: Files from public/
+- name: lib
+  description: Files from lib/
+- name: data
+  description: Files from data/
+- name: configuration
+  description: Files from settings/
+- name: backend
+  description: Files from api/
+- name: planning
+  description: Files from strategy/
+- name: scripts
+  description: Files from utils/
+- name: general
+  description: Files that don't fit other rooms
