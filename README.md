@@ -19,11 +19,35 @@ npm run dev
 CLOUD_RU_API_KEY=
 CLOUD_RU_BASE_URL=https://foundation-models.api.cloud.ru/v1
 CLOUD_RU_MODEL=ai-sage/GigaChat3-10B-A1.8B
+SEARXNG_URL=http://localhost:8888
 MEMPALACE_MCP_URL=
 MEMPALACE_COMMAND=PYTHONPATH=/Users/sergey/Downloads/mempalace-main python3 -m mempalace.mcp_server
 OUROBOROS_DESKTOP_URL=http://127.0.0.1:8765
 OUROBOROS_DESKTOP_FALLBACK=true
 ```
+
+## Веб-поиск (SearXNG)
+
+Для точных данных в анализе региона используется реальный веб-поиск. Приоритетный
+провайдер — бесплатный self-hosted **SearXNG** (метапоисковик-агрегатор Google/Bing/DDG,
+без ключей и лимитов). Он находит первоисточники: законы о бюджете, стратегии СЭР,
+открытый бюджет региона.
+
+Поднять локально:
+
+```bash
+docker run -d --name searxng -p 8888:8080 \
+  -e SEARXNG_SECRET=$(openssl rand -hex 16) \
+  searxng/searxng:latest
+# затем включить JSON в /etc/searxng/settings.yml:  search.formats: [html, json]
+docker restart searxng
+```
+
+Затем задайте `SEARXNG_URL=http://localhost:8888` в `.env.local`.
+
+Если `SEARXNG_URL` не задан, поиск откатывается на Tavily/Serper (по ключу) или
+скрейпинг DuckDuckGo/Bing. Без числовых данных в источниках система пишет
+«нужно снять baseline» и не рисует инфографику — вместо выдуманных цифр.
 
 ## Runtime policy
 
