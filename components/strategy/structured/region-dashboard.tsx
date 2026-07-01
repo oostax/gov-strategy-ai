@@ -155,6 +155,13 @@ function initials(name: string | undefined): string {
     .join("");
 }
 
+// «Приоритет (правовая основа)» → короткий заголовок + мелкая подпись-основание.
+function splitBasis(item: string): { title: string; basis?: string } {
+  const m = item.match(/^([\s\S]*?)\s*\(([^)]+)\)\s*$/);
+  if (m && m[1].trim().length > 4) return { title: m[1].trim(), basis: m[2].trim() };
+  return { title: item.trim() };
+}
+
 export function RegionDashboard({ data }: { data: RegionAnalysisOutput }) {
   return (
     <div className="space-y-5">
@@ -431,7 +438,7 @@ function ClaimCard({ claim, index }: { claim: RegionClaim; index: number }) {
                 </p>
               )}
               {hasValue && (
-                <p className="mt-1 truncate text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                <p className="mt-1 text-[11px] font-medium uppercase leading-tight tracking-wide text-muted-foreground">
                   {claim.metric}
                 </p>
               )}
@@ -513,7 +520,7 @@ function GapRow({ gap, index }: { gap: RegionStrategyRealityGap; index: number }
       className="group overflow-hidden rounded-2xl border bg-card shadow-sm transition-all duration-300 hover:shadow-md animate-in fade-in slide-in-from-bottom-3 fill-mode-both duration-500 motion-reduce:animate-none"
     >
       <div className="flex items-center justify-between gap-2 border-b bg-muted/25 px-4 py-2">
-        <p className="truncate text-sm font-semibold leading-tight">{gap.dimension}</p>
+        <p className="text-sm font-semibold leading-snug">{gap.dimension}</p>
         {gap.gapMagnitude && (
           <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-600 ring-1 ring-amber-500/25 dark:text-amber-400">
             <TriangleAlert className="size-3" />
@@ -687,21 +694,42 @@ function BudgetSection({ landscape }: { landscape: RegionAnalysisOutput["budgetL
         <SectionHeader icon={Landmark} title="Бюджет и государственные программы" subtitle="Куда идут деньги региона" />
         <div className="mb-3 grid gap-2 sm:grid-cols-3">
           {landscape.totalBudget && (
-            <div className="rounded-xl bg-muted/30 p-3">
-              <p className="text-[11px] font-semibold uppercase text-muted-foreground">Общий бюджет</p>
-              <p className="mt-1 text-lg font-bold">{landscape.totalBudget}</p>
+            <div className="flex items-start gap-2.5 rounded-xl border bg-muted/20 p-3">
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Landmark className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Общий бюджет</p>
+                <p className="mt-0.5 text-lg font-bold leading-none tracking-tight">{landscape.totalBudget}</p>
+              </div>
             </div>
           )}
           {hasNum(landscape.totalIncomeValue) && (
-            <div className="rounded-xl bg-muted/30 p-3">
-              <p className="text-[11px] font-semibold uppercase text-muted-foreground">Доходы</p>
-              <p className="mt-1 text-lg font-bold">{landscape.totalIncomeValue.toLocaleString("ru-RU")} млрд ₽</p>
+            <div className="flex items-start gap-2.5 rounded-xl border border-emerald-500/20 bg-emerald-500/[0.05] p-3">
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+                <TrendingUp className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Доходы</p>
+                <p className="mt-0.5 text-lg font-bold leading-none tracking-tight tabular-nums">
+                  {landscape.totalIncomeValue.toLocaleString("ru-RU")}
+                  <span className="ml-1 text-xs font-medium text-muted-foreground">млрд ₽</span>
+                </p>
+              </div>
             </div>
           )}
           {hasNum(deficit) && deficit > 0 && (
-            <div className="rounded-xl bg-amber-500/[0.06] p-3">
-              <p className="text-[11px] font-semibold uppercase text-amber-700">Дефицит</p>
-              <p className="mt-1 text-lg font-bold">{deficit.toLocaleString("ru-RU")} млрд ₽</p>
+            <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] p-3">
+              <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                <TriangleAlert className="size-4" />
+              </span>
+              <div className="min-w-0">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">Дефицит</p>
+                <p className="mt-0.5 text-lg font-bold leading-none tracking-tight tabular-nums">
+                  {deficit.toLocaleString("ru-RU")}
+                  <span className="ml-1 text-xs font-medium text-muted-foreground">млрд ₽</span>
+                </p>
+              </div>
             </div>
           )}
         </div>
@@ -711,24 +739,37 @@ function BudgetSection({ landscape }: { landscape: RegionAnalysisOutput["budgetL
             .sort((a, b) => (b.value as number) - (a.value as number));
           if (expenses.length < 2) return null;
           const max = Math.max(...expenses.map((e) => e.value as number), 1);
+          const totalExp = hasNum(landscape.totalExpenseValue) ? (landscape.totalExpenseValue as number) : undefined;
           return (
-            <div className="mb-3 rounded-xl border bg-muted/10 p-3">
-              <p className="mb-2 text-xs font-semibold text-muted-foreground">Структура расходов:</p>
-              <div className="space-y-1.5">
-                {expenses.map((e) => (
-                  <div key={e.id} className="flex items-center gap-2">
-                    <span className="w-32 shrink-0 truncate text-[11px]">{e.name}</span>
-                    <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
-                      <div
-                        className="h-full rounded-full bg-emerald-500/70"
-                        style={{ width: `${Math.max(3, Math.round(((e.value as number) / max) * 100))}%` }}
-                      />
+            <div className="mb-3 rounded-xl border bg-muted/10 p-3.5">
+              <p className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Структура расходов</p>
+              <div className="space-y-3">
+                {expenses.map((e) => {
+                  const value = e.value as number;
+                  const pct = totalExp ? Math.round((value / totalExp) * 100) : undefined;
+                  const barPct = totalExp
+                    ? Math.max(4, Math.round((value / totalExp) * 100))
+                    : Math.max(4, Math.round((value / max) * 100));
+                  return (
+                    <div key={e.id}>
+                      <div className="mb-1 flex items-baseline justify-between gap-3">
+                        <span className="min-w-0 text-xs font-medium leading-snug">{e.name}</span>
+                        <span className="shrink-0 text-xs font-semibold tabular-nums">
+                          {value.toLocaleString("ru-RU")} {e.unit ?? "млрд ₽"}
+                          {typeof pct === "number" && (
+                            <span className="ml-1.5 text-[10px] font-medium text-muted-foreground">{pct}%</span>
+                          )}
+                        </span>
+                      </div>
+                      <div className="h-2.5 overflow-hidden rounded-full bg-muted">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-emerald-400/70"
+                          style={{ width: `${barPct}%` }}
+                        />
+                      </div>
                     </div>
-                    <span className="w-20 shrink-0 text-right text-[11px] font-medium tabular-nums">
-                      {(e.value as number).toLocaleString("ru-RU")} {e.unit ?? "млрд ₽"}
-                    </span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           );
@@ -771,12 +812,18 @@ function PrioritiesSection({ priorities }: { priorities: RegionAnalysisOutput["s
         <SectionHeader icon={Target} title="Стратегические приоритеты" subtitle="Что закреплено официально и куда движется регион" />
         {confirmed.length > 0 && (
           <div className="grid gap-2 sm:grid-cols-2">
-            {confirmed.map((item, i) => (
-              <div key={i} className="flex items-start gap-2 rounded-xl border bg-emerald-500/[0.03] p-2.5 text-xs leading-snug">
-                <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-emerald-500" />
-                {item}
-              </div>
-            ))}
+            {confirmed.map((item, i) => {
+              const { title, basis } = splitBasis(item);
+              return (
+                <div key={i} className="flex items-start gap-2 rounded-xl border bg-emerald-500/[0.03] p-2.5">
+                  <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-emerald-500" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium leading-snug">{title}</p>
+                    {basis && <p className="mt-0.5 text-[10px] leading-snug text-muted-foreground">{basis}</p>}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
         {hypothesized.length > 0 && (
@@ -841,44 +888,56 @@ function StakeholderSection({ stakeholders }: { stakeholders: RegionAnalysisOutp
 function StakeholderCard({ stakeholder: s }: { stakeholder: RegionAnalysisOutput["stakeholderMap"][number] }) {
   const chips = [
     s.managedBudget ? { label: "Ресурс", value: s.managedBudget } : null,
-    s.engagementPrinciple ? { label: "Линия взаимодействия", value: s.engagementPrinciple } : null,
+    s.engagementPrinciple ? { label: "Линия", value: s.engagementPrinciple } : null,
   ].filter((x): x is { label: string; value: string } => Boolean(x));
   return (
-    <div className="flex flex-col rounded-2xl border bg-gradient-to-br from-card to-muted/20 p-4 shadow-sm">
-      <div className="flex items-start gap-3">
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-sm font-bold text-primary">
+    <div className="flex flex-col overflow-hidden rounded-2xl border shadow-sm transition-shadow duration-300 hover:shadow-md">
+      {/* Заголовок-баннер: крупный акцент на персоне */}
+      <div className="flex items-center gap-3 border-b bg-gradient-to-br from-primary/[0.10] via-primary/[0.04] to-transparent p-4">
+        <span className="flex size-12 shrink-0 items-center justify-center rounded-2xl bg-primary/15 text-base font-bold text-primary ring-1 ring-primary/25">
           {initials(s.name)}
         </span>
         <div className="min-w-0">
-          <p className="text-sm font-semibold leading-snug">{s.name}</p>
-          <p className="text-[11px] leading-snug text-muted-foreground">{[s.role, s.department].filter(Boolean).join(", ")}</p>
+          <p className="text-[15px] font-bold leading-tight tracking-tight">{s.name}</p>
+          <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1">
+            {s.role && <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">{s.role}</span>}
+            {s.department && <span className="text-[10px] leading-snug text-muted-foreground">{s.department}</span>}
+          </div>
         </div>
       </div>
-      {s.managementInterest && (
-        <div className="mt-3 rounded-xl bg-primary/[0.05] px-2.5 py-2 ring-1 ring-primary/10">
-          <p className="text-[10px] font-semibold uppercase tracking-wide text-primary/80">Интерес</p>
-          <p className="mt-0.5 text-xs leading-snug">{s.managementInterest}</p>
-        </div>
-      )}
-      {s.achievements && (
-        <p className="mt-2.5 text-xs leading-snug">
-          <span className="font-medium">Результаты:</span> <span className="text-muted-foreground">{s.achievements}</span>
-        </p>
-      )}
-      {s.recentNews && (
-        <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
-          <span className="font-medium text-foreground">События:</span> {s.recentNews}
-        </p>
-      )}
-      {chips.length > 0 && (
-        <div className="mt-auto flex flex-wrap gap-1.5 pt-2.5">
-          {chips.map((c, i) => (
-            <span key={i} className="rounded-md bg-muted px-2 py-0.5 text-[10px] leading-snug text-muted-foreground">
-              <span className="font-medium text-foreground">{c.label}:</span> {c.value}
-            </span>
-          ))}
-        </div>
-      )}
+      {/* Тело: сначала — что для него важно (действие для Сбера), затем факты вторым планом */}
+      <div className="flex flex-1 flex-col gap-2.5 p-4">
+        {s.managementInterest && (
+          <div className="rounded-xl bg-primary/[0.05] px-3 py-2.5 ring-1 ring-primary/10">
+            <p className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-primary/80">
+              <Target className="size-3" /> Что для него важно
+            </p>
+            <p className="mt-1 text-xs font-medium leading-snug">{s.managementInterest}</p>
+          </div>
+        )}
+        {s.achievements && (
+          <div className="border-l-2 border-emerald-500/40 pl-2.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Результаты</p>
+            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{s.achievements}</p>
+          </div>
+        )}
+        {s.recentNews && (
+          <div className="border-l-2 border-border pl-2.5">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Последние события</p>
+            <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{s.recentNews}</p>
+          </div>
+        )}
+        {chips.length > 0 && (
+          <div className="mt-auto flex flex-wrap gap-1.5 pt-1">
+            {chips.map((c, i) => (
+              <span key={i} className="inline-flex items-center gap-1 rounded-lg bg-muted px-2 py-1 text-[10px] leading-snug">
+                <span className="font-semibold text-foreground">{c.label}:</span>
+                <span className="text-muted-foreground">{c.value}</span>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
