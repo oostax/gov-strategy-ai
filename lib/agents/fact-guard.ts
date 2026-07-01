@@ -53,6 +53,43 @@ const BUZZWORDS = [
   "all-in-one",
 ];
 
+// --- Региональность стейкхолдеров и нормализация меток (уровень данных, не только UI) ---
+const FEDERAL_ROLE_RE =
+  /правительств[ао]\s+рф|российской федерации|федеральн(?:ый|ого|ая|ой|ые|ых)|госдум|государственн(?:ая|ой)\s+дум|совет\s+федерации|сенатор|министр\s+рф|вице[-\s]?премьер|заместител[ья]\s+председателя\s+правительства\s+рф/i;
+
+function isFederalStakeholder(role?: string, department?: string): boolean {
+  const text = `${role ?? ""} ${department ?? ""}`.replace(/[‐‑‒–—-]/g, " ");
+  return FEDERAL_ROLE_RE.test(text);
+}
+
+function hasFullPersonName(name?: string): boolean {
+  return (name ?? "").trim().split(/\s+/).filter(Boolean).length >= 3;
+}
+
+const PROBABILITY_NORM: Record<string, "high" | "medium" | "low"> = {
+  high: "high", "высокая": "high", "высокий": "high", "высок": "high", "medium-high": "high",
+  medium: "medium", "средняя": "medium", "средний": "medium", "средн": "medium",
+  "medium-low": "low", "low-medium": "low",
+  low: "low", "низкая": "low", "низкий": "low", "низк": "low",
+};
+
+function normalizeProbability(value: unknown): "high" | "medium" | "low" {
+  const key = String(value ?? "").trim().toLowerCase();
+  return PROBABILITY_NORM[key] ?? "medium";
+}
+
+const THREAT_RU: Record<string, string> = {
+  high: "высокий", "medium-high": "высокий",
+  medium: "средний",
+  "medium-low": "средний", "low-medium": "низкий",
+  low: "низкий",
+};
+
+function normalizeThreatLevel(value: unknown): string {
+  const raw = String(value ?? "").trim();
+  return THREAT_RU[raw.toLowerCase()] ?? raw;
+}
+
 function hasPlaceholder(value: string) {
   return [...PLACEHOLDER_PATTERNS, ...EMPTY_ANALYSIS_PATTERNS].some((re) => {
     re.lastIndex = 0;
@@ -247,24 +284,34 @@ export function sanitizeRegionOutput(output: RegionAnalysisOutput): RegionAnalys
     }
   }
 
-  sanitized.stakeholderMap = sanitized.stakeholderMap.map((s) => {
-    const cleaned: RegionStakeholder = {
-      ...s,
-      name: cleanPlaceholder(s.name),
-      role: cleanPlaceholder(s.role),
-      department: cleanPlaceholder(s.department),
-      managementInterest: cleanPlaceholder(s.managementInterest, ""),
-      relationshipToSber: cleanPlaceholder(s.relationshipToSber, ""),
-      engagementPrinciple: cleanPlaceholder(s.engagementPrinciple, ""),
-    };
-    if (hasPlaceholder(String(s.name ?? "")) || s.name === "уточняется") {
-      cleaned.name = "ФИО не указан в источниках";
-    }
-    return cleaned;
-  });
+  // Только подтверждённые РЕГИОНАЛЬНЫЕ лица: полное ФИО (>=3 слов),
+  // без федеральных чиновников и без плейсхолдеров. Иначе федеральные визитёры
+  // (напр. вице-премьеры) и заглушки утекали в экспорт/память через данные.
+  sanitized.stakeholderMap = sanitized.stakeholderMap
+    .filter((s) => {
+      if (isFederalStakeholder(s.role, s.department)) return false;
+      if (!hasFullPersonName(s.name)) return false;
+      if (hasPlaceholder(String(s.name ?? ""))) return false;
+      return true;
+    })
+    .map((s) => {
+      const cleaned: RegionStakeholder = {
+        ...s,
+        name: cleanPlaceholder(s.name),
+        role: cleanPlaceholder(s.role),
+        department: cleanPlaceholder(s.department),
+        achievements: cleanPlaceholder(s.achievements, ""),
+        recentNews: cleanPlaceholder(s.recentNews, ""),
+        managementInterest: cleanPlaceholder(s.managementInterest, ""),
+        relationshipToSber: cleanPlaceholder(s.relationshipToSber, ""),
+        engagementPrinciple: cleanPlaceholder(s.engagementPrinciple, ""),
+      };
+      return cleaned;
+    });
 
   sanitized.competitiveLandscape = sanitized.competitiveLandscape.map((c) => {
     const cleaned: Competitor = { ...c };
+    cleaned.threatLevel = normalizeThreatLevel(c.threatLevel);
     if (containsBuzzword(c.product) || containsBuzzword(c.where) || containsBuzzword(c.sberAdvantage)) {
       cleaned.evidence = cleaned.evidence && typeof cleaned.evidence === "string"
         ? `${cleaned.evidence} (buzzword; проверить источник)`
@@ -286,6 +333,7 @@ export function sanitizeRegionOutput(output: RegionAnalysisOutput): RegionAnalys
   if (sanitized.regionalScenarios) {
     sanitized.regionalScenarios = sanitized.regionalScenarios.map((sc) => {
       const cleaned: RegionalScenario = { ...sc };
+      cleaned.probability = normalizeProbability(sc.probability);
       cleaned.budgetImplication = cleanPlaceholder(sc.budgetImplication);
       cleaned.industryImpact = cleanPlaceholder(sc.industryImpact);
       cleaned.sberPosture = cleanPlaceholder(sc.sberPosture);
