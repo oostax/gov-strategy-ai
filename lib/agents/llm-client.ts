@@ -1,6 +1,8 @@
 import type { LlmCall } from "@/lib/schemas/agent";
 
-const MAX_ATTEMPTS = 3;
+// 2 попытки на модель: при наличии запасной модели суммарно до 4 попыток на двух
+// моделях — быстрее уходим на фолбэк, не залипая на недоступной основной.
+const MAX_ATTEMPTS = 2;
 // Транзиентные ошибки сети/сервера, которые имеет смысл повторить.
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
 
@@ -28,7 +30,9 @@ async function callOnce(params: {
   try {
     response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
-      signal: AbortSignal.timeout(180_000),
+      // 120с: щедро для медленных ответов, но обрываем зависший коннект раньше,
+      // чем провайдерский шлюз отдаст 504 (~180с) — быстрее уходим на ретрай/фолбэк.
+      signal: AbortSignal.timeout(Number(process.env.LLM_REQUEST_TIMEOUT_MS || 120_000)),
       headers: {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
@@ -84,44 +88,59 @@ async function callOnce(params: {
   return content;
 }
 
+function isReasoning(model: string) {
+  return model.includes("gpt-oss") || model.includes("o1") || model.includes("o3");
+}
+
 export async function callLLM({ messages, temperature = 0.2, maxTokens = 4000, responseFormat }: LlmCall) {
   const baseUrl = process.env.CLOUD_RU_BASE_URL || "https://foundation-models.api.cloud.ru/v1";
   const apiKey = process.env.CLOUD_RU_API_KEY;
-  const model = process.env.CLOUD_RU_MODEL || "ai-sage/GigaChat3-10B-A1.8B";
 
   if (!apiKey) {
     throw new Error("CLOUD_RU_API_KEY is required. Mock generation is disabled.");
   }
 
-  // Reasoning-модели (gpt-oss-120b и подобные) нуждаются в большем max_tokens,
-  // потому что reasoning-токены тоже считаются. Увеличиваем для них.
-  const isReasoningModel = model.includes("gpt-oss") || model.includes("o1") || model.includes("o3");
-  const effectiveMaxTokens = isReasoningModel ? Math.max(maxTokens * 3, 8000) : maxTokens;
+  // Основная модель + запасная. При недоступности основной (503/504/no healthy
+  // upstream, таймаут) автоматически повторяем запрос на запасной модели, чтобы
+  // сбой одного провайдера не ронял генерацию. Запасная по умолчанию — дешёвая
+  // и стабильная GigaChat (Сбер, внутренняя, не reasoning).
+  const primary = process.env.CLOUD_RU_MODEL || "ai-sage/GigaChat3-10B-A1.8B";
+  const fallback = process.env.CLOUD_RU_FALLBACK_MODEL || "ai-sage/GigaChat3-10B-A1.8B";
+  const models = [primary, ...(fallback && fallback !== primary ? [fallback] : [])];
 
   let lastError: unknown;
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    try {
-      return await callOnce({
-        baseUrl,
-        apiKey,
-        model,
-        isReasoningModel,
-        messages,
-        temperature,
-        maxTokens: effectiveMaxTokens,
-        responseFormat,
-      });
-    } catch (err) {
-      lastError = err;
-      const retryable = (err as Error & { retryable?: boolean }).retryable === true;
-      if (!retryable || attempt === MAX_ATTEMPTS) break;
-      // Экспоненциальный backoff: 1.5с, 3с.
-      const delay = 1500 * attempt;
-      console.warn(
-        `[llm-client] attempt ${attempt}/${MAX_ATTEMPTS} failed (${err instanceof Error ? err.message : err}); retry in ${delay}ms`,
-      );
-      await sleep(delay);
+  for (let m = 0; m < models.length; m++) {
+    const model = models[m];
+    const isReasoningModel = isReasoning(model);
+    const effectiveMaxTokens = isReasoningModel ? Math.max(maxTokens * 3, 8000) : maxTokens;
+    if (m > 0) {
+      console.warn(`[llm-client] primary failed; failover to fallback model ${model}`);
     }
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        return await callOnce({
+          baseUrl,
+          apiKey,
+          model,
+          isReasoningModel,
+          messages,
+          temperature,
+          maxTokens: effectiveMaxTokens,
+          responseFormat,
+        });
+      } catch (err) {
+        lastError = err;
+        const retryable = (err as Error & { retryable?: boolean }).retryable === true;
+        if (!retryable || attempt === MAX_ATTEMPTS) break; // прекращаем ретраи этой модели
+        // Экспоненциальный backoff: 1.5с, 3с.
+        const delay = 1500 * attempt;
+        console.warn(
+          `[llm-client] ${model} attempt ${attempt}/${MAX_ATTEMPTS} failed (${err instanceof Error ? err.message : err}); retry in ${delay}ms`,
+        );
+        await sleep(delay);
+      }
+    }
+    // Модель исчерпала попытки — переходим к следующей (запасной), если есть.
   }
   throw lastError instanceof Error ? lastError : new Error("LLM call failed");
 }
