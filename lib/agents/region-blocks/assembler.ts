@@ -264,19 +264,33 @@ function cleanScenarioText(value: string): string {
 }
 
 export function assertRegionOutputReady(output: RegionAnalysisOutput) {
-  const issues: string[] = [];
-  if (!output.regionSummary?.name?.trim()) issues.push("regionSummary.name missing");
-  if (!output.industryBreakdown?.length) issues.push("industryBreakdown empty");
-  if (!output.budgetLandscape || (!output.budgetLandscape.totalBudget && !output.budgetLandscape.breakdown?.length && !output.budgetLandscape.totalIncomeValue)) {
-    issues.push("budgetLandscape weak");
+  // Жёсткие требования: регион опознан и есть источники.
+  const hardIssues: string[] = [];
+  if (!output.regionSummary?.name?.trim()) hardIssues.push("regionSummary.name missing");
+  if (!output.sources?.length) hardIssues.push("sources empty");
+
+  // Содержательные блоки: адаптивная композиция допускает разный состав, поэтому
+  // не требуем КАЖДЫЙ блок — достаточно значимого минимума. Один пустой блок
+  // (напр. приоритеты) не должен ронять всю сессию: пустые секции просто скрываются.
+  const budgetOk = Boolean(
+    output.budgetLandscape &&
+    (output.budgetLandscape.totalBudget ||
+      output.budgetLandscape.breakdown?.length ||
+      output.budgetLandscape.totalIncomeValue),
+  );
+  const populatedContentBlocks = [
+    (output.industryBreakdown?.length ?? 0) > 0,
+    budgetOk,
+    (output.regionalScenarios?.length ?? 0) > 0,
+    Boolean(output.strategicPriorities?.confirmed?.length || output.strategicPriorities?.roadmap?.length),
+  ].filter(Boolean).length;
+
+  if (populatedContentBlocks < 2) {
+    hardIssues.push(`too few content blocks (${populatedContentBlocks}/4)`);
   }
-  if (!output.regionalScenarios?.length) issues.push("regionalScenarios empty");
-  if (!output.strategicPriorities?.confirmed?.length && !output.strategicPriorities?.roadmap?.length) {
-    issues.push("strategicPriorities empty");
-  }
-  if (!output.sources?.length) issues.push("sources empty");
-  if (issues.length) {
-    throw new Error(`Block output is not ready: ${issues.join(", ")}`);
+
+  if (hardIssues.length) {
+    throw new Error(`Block output is not ready: ${hardIssues.join(", ")}`);
   }
 }
 
