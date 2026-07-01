@@ -5,39 +5,22 @@ import { AlertCircle, CheckCircle2, ChevronDown, ChevronUp, ExternalLink, Shield
 import { Card, CardContent } from "@/components/ui/card";
 import type { DataGap, Source } from "@/lib/schemas/structured-output";
 
-function isUsefulHypothesis(value: string) {
-  const text = value.trim();
-  if (!text) return false;
-  if (/в (?:представленных )?источниках нет|нет (?:конкретных |прямых )?(?:данных|сведений|упоминаний)|не содержит данных|не содержит сведений|без детализации|нет прямого упоминания/i.test(text)) {
-    return false;
-  }
-  if (/[?？]/.test(text)) return true;
-  return /^(по .* нужно|нужно|проверить|добрать|уточнить|подтвердить|найти|какие|какой|какая|кто|где|сколько|перечень|источник)/i.test(text);
-}
-
+// Руководителю показываем ТОЛЬКО источники — не список «что проверить».
+// hypotheses/dataGaps принимаем для совместимости вызовов, но не рендерим как задачи:
+// это внутренний сигнал системы для автодозапроса, а не домашка руководителя.
 export function SourcesFooter({
   sources,
-  hypotheses,
-  dataGaps = [],
 }: {
   sources: Source[];
-  hypotheses: string[];
+  hypotheses?: string[];
   dataGaps?: DataGap[];
 }) {
   const [open, setOpen] = useState(false);
   const verified = sources.filter((s) => s.isVerified);
   const unverified = sources.filter((s) => !s.isVerified);
-  const usefulHypotheses = hypotheses.filter(isUsefulHypothesis);
-  const checks = [
-    ...dataGaps
-      .filter((gap) => isUsefulHypothesis(gap.question))
-      .map((gap) => ({
-        title: gap.question,
-        detail: [gap.howToGet, gap.sourceHint].filter(Boolean).join(" · "),
-      })),
-    ...usefulHypotheses.map((item) => ({ title: item, detail: "" })),
-  ].slice(0, 8);
-  const previewSources = verified.slice(0, 3);
+  const previewSources = (verified.length ? verified : unverified).slice(0, 3);
+
+  if (sources.length === 0) return null;
 
   return (
     <Card className="rounded-2xl">
@@ -51,11 +34,6 @@ export function SourcesFooter({
               <span className="rounded-full bg-emerald-500/10 px-2 py-1 font-medium text-emerald-700">
                 подтверждено: {verified.length}
               </span>
-              {checks.length > 0 && (
-                <span className="rounded-full bg-amber-500/10 px-2 py-1 font-medium text-amber-700">
-                  проверить: {checks.length}
-                </span>
-              )}
               {unverified.length > 0 && (
                 <span className="rounded-full bg-muted px-2 py-1 font-medium text-muted-foreground">
                   без полного текста: {unverified.length}
@@ -63,7 +41,7 @@ export function SourcesFooter({
               )}
             </div>
           </div>
-          {(verified.length > 3 || checks.length > 0 || unverified.length > 0) && (
+          {(verified.length > 3 || unverified.length > 0) && (
             <button
               type="button"
               onClick={() => setOpen((value) => !value)}
@@ -101,29 +79,19 @@ export function SourcesFooter({
               )}
             </div>
 
-            <div className="space-y-1.5">
-              <p className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
-                <AlertCircle className="size-3.5 text-amber-600" /> Проверить отдельно
-              </p>
-              {checks.length === 0 && unverified.length === 0 ? (
-                <p className="text-xs text-muted-foreground">Отдельная проверка не требуется.</p>
-              ) : (
-                <>
-                  {checks.map((item, idx) => (
-                    <div key={idx} className="rounded-lg border border-amber-200/60 bg-amber-50/30 px-2.5 py-2 dark:border-amber-900/30 dark:bg-amber-950/20">
-                      <p className="text-xs font-medium leading-snug">{item.title}</p>
-                      {item.detail && <p className="mt-0.5 text-[11px] text-muted-foreground">{item.detail}</p>}
-                    </div>
-                  ))}
-                  {unverified.map((src, idx) => (
-                    <div key={`uv-${idx}`} className="rounded-lg border bg-muted/20 px-2.5 py-2">
-                      <SourceTitle src={src} />
-                      <p className="mt-0.5 text-[11px] text-muted-foreground">{src.excerpt}</p>
-                    </div>
-                  ))}
-                </>
-              )}
-            </div>
+            {unverified.length > 0 && (
+              <div className="space-y-1.5">
+                <p className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                  <AlertCircle className="size-3.5 text-muted-foreground" /> Без полного текста
+                </p>
+                {unverified.map((src, idx) => (
+                  <div key={`uv-${idx}`} className="rounded-lg border bg-muted/20 px-2.5 py-2">
+                    <SourceTitle src={src} />
+                    <p className="mt-0.5 text-[11px] text-muted-foreground">{src.excerpt}</p>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </CardContent>

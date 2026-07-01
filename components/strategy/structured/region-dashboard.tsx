@@ -654,13 +654,12 @@ function CompetitionSection({ competitors, checks }: { competitors: RegionAnalys
               <div className="min-w-0">
                 <p className="text-sm font-medium">{c.vendor}</p>
                 <p className="text-xs text-muted-foreground">{c.product} · {c.where}</p>
-                {(c.stage || c.evidence || c.incumbentPosition || c.nextCheck) && (
+                {(c.stage || c.evidence || c.incumbentPosition || c.sberCounterPosition) && (
                   <DetailsToggle>
                     {c.stage && <p className="text-[11px] text-muted-foreground">Статус: {c.stage}</p>}
                     {c.evidence && <p className="text-[11px]">Факт: {c.evidence}</p>}
                     {c.incumbentPosition && <p className="text-[11px] text-muted-foreground">Где закреплён: {c.incumbentPosition}</p>}
                     {c.sberCounterPosition && <p className="text-[11px] text-primary">Позиция Сбера: {c.sberCounterPosition}</p>}
-                    {c.nextCheck && <p className="text-[11px] text-amber-700">Что проверить: {c.nextCheck}</p>}
                   </DetailsToggle>
                 )}
               </div>

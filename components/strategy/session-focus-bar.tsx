@@ -157,7 +157,6 @@ function getSections(output: TypedOutput) {
       { href: "#priorities", label: "Приоритеты", icon: Target, primary: true },
       { href: "#scenarios", label: "Сценарии", icon: Route, primary: true },
       { href: "#competition", label: "Альтернативы", icon: Building2, primary: true },
-      { href: "#data-gaps", label: "Проверка", icon: ShieldCheck },
       { href: "#sources", label: "Источники", icon: Flag },
     ];
   }
