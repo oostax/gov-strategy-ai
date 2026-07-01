@@ -21,15 +21,24 @@ function isValidStructuredOutput(value: unknown): value is TypedOutput {
   if ("score" in value.data || "problems" in value.data) return false;
 
   if (value.kind === "region") {
-    return (
-      isRecord(value.data.regionSummary) &&
-      typeof value.data.regionSummary.name === "string" &&
-      Array.isArray(value.data.industryBreakdown) &&
-      value.data.industryBreakdown.length > 0 &&
-      Array.isArray(value.data.regionalScenarios) &&
-      value.data.regionalScenarios.length > 0 &&
-      isRecord(value.data.budgetLandscape)
-    );
+    // Согласовано со смягчённым гейтом сборки: не требуем КАЖДЫЙ блок (адаптивная
+    // композиция даёт разный состав). Достаточно: имя региона + бюджет + хотя бы
+    // один содержательный слой. Пустые секции скрываются в дашборде.
+    const data = value.data;
+    const summary = data.regionSummary;
+    const budget = data.budgetLandscape;
+    const priorities = data.strategicPriorities;
+    if (!isRecord(summary) || typeof summary.name !== "string") return false;
+    if (!isRecord(budget)) return false;
+    const hasConfirmedPriorities =
+      isRecord(priorities) && Array.isArray(priorities.confirmed) && priorities.confirmed.length > 0;
+    const hasContent =
+      (Array.isArray(data.industryBreakdown) && data.industryBreakdown.length > 0) ||
+      (Array.isArray(data.regionalScenarios) && data.regionalScenarios.length > 0) ||
+      (Array.isArray(data.claims) && data.claims.length > 0) ||
+      isRecord(data.coreThesis) ||
+      hasConfirmedPriorities;
+    return hasContent;
   }
 
   if (value.kind === "meeting") {
