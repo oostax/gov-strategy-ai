@@ -445,7 +445,10 @@ export async function startBlocksGeneration(
 ): Promise<{ run: BlockRun; promise: Promise<{ output: TypedOutput; run: BlockRun }> }> {
   const planStartedAt = Date.now();
   console.log(`[blocks][plan] start session=${session.id}`);
-  const plannerTimeoutMs = Number(process.env.BLOCK_PLANNER_TIMEOUT_MS || 12_000);
+  // Планировщик теперь отвечает и за адаптивную композицию (archetype/focusAngle/
+  // sectionOrder). У reasoning-моделей (gpt-oss) ответ дольше — иначе частый фолбэк
+  // без архетипа. 45с достаточно; при таймауте деградируем к дефолтному составу.
+  const plannerTimeoutMs = Number(process.env.BLOCK_PLANNER_TIMEOUT_MS || 45_000);
   let plan: RegionBlocksPlan;
   let planMode: "llm" | "fallback" = "llm";
   try {
