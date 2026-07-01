@@ -37,6 +37,7 @@ import {
   writeStructuredOutput,
 } from "./storage";
 import { logBlockEvent } from "./logger";
+import { guardRegionOutput } from "@/lib/agents/fact-guard";
 
 function elapsedMs(startedAt: number) {
   return `${Date.now() - startedAt}ms`;
@@ -364,7 +365,15 @@ async function continueBlocksGeneration(
   run = await updateRun(run, { status: "assembling" });
   const blocks = await collectReadyBlocks(run);
   const assembled = assembleRegionBlocks({ regionName: plan.region, blocks });
-  const output = toTypedRegionOutput(assembled);
+  // Привязка «факт → источник → уверенность»: числам бюджета/сценариев/приоритетов
+  // проставляем источник из собранных материалов, неподтверждённое уводим в dataGaps.
+  const guardEvidence = (assembled.sources ?? []).map((s) => ({
+    title: s.title,
+    url: s.url ?? "",
+    snippet: s.excerpt ?? null,
+  }));
+  const guarded = guardRegionOutput(assembled, guardEvidence);
+  const output = toTypedRegionOutput(guarded);
   await writeStructuredOutput(session.id, output);
   try {
     const fs = await import("fs/promises");
