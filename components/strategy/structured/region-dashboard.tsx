@@ -2,20 +2,32 @@
 
 import { useState, type ReactNode } from "react";
 import {
+  ArrowRight,
   Building2,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
+  ExternalLink,
+  GitCompareArrows,
   HelpCircle,
   Landmark,
   Lightbulb,
   MapPin,
+  Minus,
   Route,
+  Target,
+  TrendingDown,
+  TrendingUp,
+  TriangleAlert,
   Users,
   Zap,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
-import type { RegionAnalysisOutput } from "@/lib/schemas/structured-output";
+import type {
+  RegionAnalysisOutput,
+  RegionClaim,
+  RegionStrategyRealityGap,
+} from "@/lib/schemas/structured-output";
 import { SourcesFooter } from "./sources-footer";
 import { VisualsSection } from "./visuals-section";
 
@@ -82,6 +94,20 @@ export function RegionDashboard({ data }: { data: RegionAnalysisOutput }) {
 
       {/* Ключевой тезис анализа */}
       {data.coreThesis && <CoreThesisSection thesis={data.coreThesis} />}
+
+      {/* Выводы из фактов: цифра → следствие → решение */}
+      {data.claims && data.claims.length > 0 && (
+        <div id="insights" className="scroll-mt-56">
+          <ClaimsSection claims={data.claims} />
+        </div>
+      )}
+
+      {/* Стратегия vs факт */}
+      {data.strategyRealityGap && data.strategyRealityGap.length > 0 && (
+        <div id="reality-gap" className="scroll-mt-56">
+          <RealityGapSection gaps={data.strategyRealityGap} />
+        </div>
+      )}
 
       {/* Отраслевая структура */}
       <div id="industries" className="scroll-mt-56">
@@ -212,6 +238,264 @@ function ThesisCell({ label, value, tone = "neutral" }: { label: string; value: 
     <div className={`rounded-xl border p-3 ${toneClass}`}>
       <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
       <p className="mt-1 text-xs leading-snug">{value}</p>
+    </div>
+  );
+}
+
+// ── Слой «Выводы из фактов»: число → следствие → решение ─────────────────────
+// Цветовая семантика направления метрики: рост/снижение/стабильно.
+type DirectionTone = {
+  Icon: typeof TrendingUp;
+  glyph: string;
+  value: string;      // цвет крупного числа
+  chipBg: string;     // фон значка направления
+  chipRing: string;   // обводка карточки/значка
+  spine: string;      // цвет вертикальной «шины» слева
+};
+
+function directionTone(direction: RegionClaim["direction"]): DirectionTone {
+  if (direction === "up") {
+    return {
+      Icon: TrendingUp,
+      glyph: "↑",
+      value: "text-emerald-600 dark:text-emerald-400",
+      chipBg: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+      chipRing: "ring-emerald-500/20",
+      spine: "bg-emerald-500",
+    };
+  }
+  if (direction === "down") {
+    return {
+      Icon: TrendingDown,
+      glyph: "↓",
+      value: "text-rose-600 dark:text-rose-400",
+      chipBg: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
+      chipRing: "ring-rose-500/20",
+      spine: "bg-rose-500",
+    };
+  }
+  return {
+    Icon: Minus,
+    glyph: "→",
+    value: "text-slate-600 dark:text-slate-300",
+    chipBg: "bg-slate-500/10 text-slate-600 dark:text-slate-300",
+    chipRing: "ring-slate-400/20",
+    spine: "bg-slate-400",
+  };
+}
+
+function confidenceLabel(confidence: RegionClaim["confidence"]): string {
+  if (confidence === "high") return "высокая";
+  if (confidence === "medium") return "средняя";
+  if (confidence === "low") return "низкая";
+  return "";
+}
+
+function confidenceBadgeClass(confidence: RegionClaim["confidence"]): string {
+  if (confidence === "high") return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 ring-emerald-500/20";
+  if (confidence === "medium") return "bg-amber-500/10 text-amber-700 dark:text-amber-400 ring-amber-500/20";
+  if (confidence === "low") return "bg-muted text-muted-foreground ring-border";
+  return "bg-muted text-muted-foreground ring-border";
+}
+
+// Форматируем число компактно: большие значения через разделители, дробные — с 1 знаком.
+function formatMetric(value: number): string {
+  if (!Number.isInteger(value) && Math.abs(value) < 1000) return value.toFixed(1);
+  return value.toLocaleString("ru-RU");
+}
+
+function ClaimsSection({ claims }: { claims: NonNullable<RegionAnalysisOutput["claims"]> }) {
+  if (!claims?.length) return null;
+  return (
+    <Card className="overflow-hidden rounded-2xl border-primary/10">
+      <CardContent className="p-4 sm:p-5">
+        <div className="mb-4 flex items-center gap-2.5">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            <Zap className="size-4" />
+          </span>
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold leading-tight">Выводы из фактов</h3>
+            <p className="text-[11px] leading-tight text-muted-foreground">
+              Цифра → следствие → управленческое решение
+            </p>
+          </div>
+        </div>
+        <div className="grid gap-3">
+          {claims.map((claim, idx) => (
+            <ClaimCard key={claim.id} claim={claim} index={idx} />
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ClaimCard({ claim, index }: { claim: RegionClaim; index: number }) {
+  const tone = directionTone(claim.direction);
+  const DirIcon = tone.Icon;
+  const hasValue = typeof claim.metricValue === "number";
+  return (
+    <div
+      style={{ animationDelay: `${Math.min(index, 6) * 70}ms` }}
+      className="group relative overflow-hidden rounded-2xl border bg-gradient-to-br from-card to-muted/25 shadow-sm ring-1 ring-transparent transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md hover:ring-primary/15 motion-reduce:transform-none animate-in fade-in slide-in-from-bottom-3 fill-mode-both duration-500 motion-reduce:animate-none"
+    >
+      {/* Цветная «шина» слева кодирует направление метрики */}
+      <span className={`absolute inset-y-0 left-0 w-1 ${tone.spine}`} aria-hidden />
+      <div className="p-3.5 pl-4 sm:p-4 sm:pl-5">
+        {/* Верх: крупная метрика + значок направления + уверенность */}
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className={`flex size-9 shrink-0 items-center justify-center rounded-xl ring-1 ${tone.chipBg} ${tone.chipRing}`}>
+              <DirIcon className="size-4" />
+            </span>
+            <div className="min-w-0">
+              {hasValue ? (
+                <p className={`flex items-baseline gap-1 text-2xl font-bold leading-none tracking-tight tabular-nums sm:text-[28px] ${tone.value}`}>
+                  <span aria-hidden className="text-xl leading-none">{tone.glyph}</span>
+                  {formatMetric(claim.metricValue as number)}
+                </p>
+              ) : (
+                <p className={`text-lg font-bold leading-none tracking-tight ${tone.value}`}>
+                  <span aria-hidden>{tone.glyph} </span>
+                  {claim.metric}
+                </p>
+              )}
+              {hasValue && (
+                <p className="mt-1 truncate text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  {claim.metric}
+                </p>
+              )}
+            </div>
+          </div>
+          {claim.confidence && (
+            <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ${confidenceBadgeClass(claim.confidence)}`}>
+              {confidenceLabel(claim.confidence)}
+            </span>
+          )}
+        </div>
+
+        {/* Поток: следствие → решение. На широких экранах — в ряд со стрелкой. */}
+        <div className="mt-3.5 grid items-stretch gap-2 sm:grid-cols-[1fr_auto_1.15fr] sm:gap-0">
+          <div className="rounded-xl bg-muted/40 px-3 py-2.5 sm:rounded-r-none">
+            <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Следствие</p>
+            <p className="text-xs leading-snug text-muted-foreground">{claim.implication}</p>
+          </div>
+          <div className="flex items-center justify-center py-0.5 sm:px-1" aria-hidden>
+            <span className="flex size-6 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm transition-transform duration-300 group-hover:translate-x-0.5 motion-reduce:transform-none">
+              <ArrowRight className="size-3.5 max-sm:rotate-90" />
+            </span>
+          </div>
+          <div className="rounded-xl bg-primary/[0.06] px-3 py-2.5 ring-1 ring-primary/15 sm:rounded-l-none">
+            <p className="mb-0.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-primary/80">
+              <Target className="size-3" /> Решение
+            </p>
+            <p className="text-xs font-medium leading-snug">{claim.decision}</p>
+          </div>
+        </div>
+
+        {claim.sourceUrl && (
+          <a
+            href={claim.sourceUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-2.5 inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground underline-offset-2 transition hover:text-foreground hover:underline"
+          >
+            <ExternalLink className="size-3" />
+            {claim.source || "Источник"}
+          </a>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Слой «Стратегия vs факт»: расходящийся двусторонний визуал ───────────────
+function RealityGapSection({ gaps }: { gaps: NonNullable<RegionAnalysisOutput["strategyRealityGap"]> }) {
+  if (!gaps?.length) return null;
+  return (
+    <Card className="overflow-hidden rounded-2xl border-primary/10">
+      <CardContent className="p-4 sm:p-5">
+        <div className="mb-4 flex items-center gap-2.5">
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            <GitCompareArrows className="size-4" />
+          </span>
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold leading-tight">Стратегия vs факт</h3>
+            <p className="text-[11px] leading-tight text-muted-foreground">
+              Где замысел расходится с реальностью
+            </p>
+          </div>
+        </div>
+        <div className="grid gap-3">
+          {gaps.map((gap, idx) => (
+            <GapRow key={`${gap.id ?? "gap"}-${idx}`} gap={gap} index={idx} />
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function GapRow({ gap, index }: { gap: RegionStrategyRealityGap; index: number }) {
+  return (
+    <div
+      style={{ animationDelay: `${Math.min(index, 6) * 70}ms` }}
+      className="group overflow-hidden rounded-2xl border bg-card shadow-sm transition-all duration-300 hover:shadow-md animate-in fade-in slide-in-from-bottom-3 fill-mode-both duration-500 motion-reduce:animate-none"
+    >
+      <div className="flex items-center justify-between gap-2 border-b bg-muted/25 px-4 py-2">
+        <p className="truncate text-sm font-semibold leading-tight">{gap.dimension}</p>
+        {gap.gapMagnitude && (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-600 ring-1 ring-amber-500/25 dark:text-amber-400">
+            <TriangleAlert className="size-3" />
+            {gap.gapMagnitude}
+          </span>
+        )}
+      </div>
+      {/* Две расходящиеся стороны: замысел (эмеральд) ← разрыв → факт (роза) */}
+      <div className="grid items-stretch sm:grid-cols-[1fr_auto_1fr]">
+        <div className="border-b p-3.5 sm:border-b-0 sm:border-r">
+          <p className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-600 dark:text-emerald-400">
+            <Target className="size-3" /> Замысел
+          </p>
+          <p className="text-xs leading-snug">{gap.strategyIntent}</p>
+        </div>
+        {/* Мотив расхождения: две встречно направленные стрелки */}
+        <div
+          className="flex items-center justify-center gap-1 bg-gradient-to-b from-emerald-500/[0.05] via-amber-500/[0.06] to-rose-500/[0.05] px-3 py-1.5 sm:flex-col sm:py-3"
+          aria-hidden
+        >
+          <span className="flex size-5 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
+            <ArrowRight className="size-3 rotate-180 transition-transform duration-300 group-hover:-translate-x-0.5 motion-reduce:transform-none max-sm:-rotate-90 max-sm:group-hover:-translate-y-0.5" />
+          </span>
+          <span className="h-4 w-px bg-border sm:h-px sm:w-4" />
+          <span className="flex size-5 items-center justify-center rounded-full bg-rose-500/15 text-rose-600 dark:text-rose-400">
+            <ArrowRight className="size-3 transition-transform duration-300 group-hover:translate-x-0.5 motion-reduce:transform-none max-sm:rotate-90 max-sm:group-hover:translate-y-0.5" />
+          </span>
+        </div>
+        <div className="p-3.5">
+          <p className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-rose-600 dark:text-rose-400">
+            <TriangleAlert className="size-3" /> Факт
+          </p>
+          <p className="text-xs leading-snug">{gap.actualFact}</p>
+        </div>
+      </div>
+      {gap.source && (
+        <div className="border-t bg-muted/10 px-4 py-1.5">
+          {gap.sourceUrl ? (
+            <a
+              href={gap.sourceUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground underline-offset-2 transition hover:text-foreground hover:underline"
+            >
+              <ExternalLink className="size-3" />
+              {gap.source}
+            </a>
+          ) : (
+            <p className="text-[10px] text-muted-foreground">{gap.source}</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

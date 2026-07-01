@@ -38,6 +38,7 @@ import {
 } from "./storage";
 import { logBlockEvent } from "./logger";
 import { guardRegionOutput } from "@/lib/agents/fact-guard";
+import { synthesizeRegionInsights } from "./synthesis";
 
 function elapsedMs(startedAt: number) {
   return `${Date.now() - startedAt}ms`;
@@ -365,6 +366,14 @@ async function continueBlocksGeneration(
   run = await updateRun(run, { status: "assembling" });
   const blocks = await collectReadyBlocks(run);
   const assembled = assembleRegionBlocks({ regionName: plan.region, blocks });
+  try {
+    const insights = await synthesizeRegionInsights(assembled);
+    if (insights.coreThesis) assembled.coreThesis = insights.coreThesis;
+    if (insights.claims?.length) assembled.claims = insights.claims;
+    if (insights.strategyRealityGap?.length) assembled.strategyRealityGap = insights.strategyRealityGap;
+  } catch (err) {
+    console.warn("[blocks][synthesis] failed", err);
+  }
   // Привязка «факт → источник → уверенность»: числам бюджета/сценариев/приоритетов
   // проставляем источник из собранных материалов, неподтверждённое уводим в dataGaps.
   const guardEvidence = (assembled.sources ?? []).map((s) => ({
