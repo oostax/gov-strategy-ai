@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import {
   ArrowRight,
   Building2,
+  Compass,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -162,11 +163,23 @@ function splitBasis(item: string): { title: string; basis?: string } {
   return { title: item.trim() };
 }
 
+// Порядок «классических» блоков по умолчанию, если план не задал свой.
+const DEFAULT_CLASSIC_ORDER = ["budget", "priorities", "scenarios", "industries", "stakeholders", "competition"];
+
 export function RegionDashboard({ data }: { data: RegionAnalysisOutput }) {
+  // Адаптивная композиция: порядок блоков из плана; недостающие дописываем в хвост.
+  const planned = (data.sectionOrder ?? []).filter((k) => DEFAULT_CLASSIC_ORDER.includes(k));
+  const classicOrder: string[] = [];
+  for (const key of [...planned, ...DEFAULT_CLASSIC_ORDER]) {
+    if (!classicOrder.includes(key)) classicOrder.push(key);
+  }
   return (
     <div className="space-y-5">
       {/* Hero: Карточка региона */}
       <RegionHero summary={data.regionSummary} />
+
+      {/* Тип региона + фокус анализа (адаптивная композиция) */}
+      <ArchetypeBanner archetype={data.regionArchetype} focusAngle={data.focusAngle} />
 
       {/* Ключевой тезис анализа */}
       {data.coreThesis && <CoreThesisSection thesis={data.coreThesis} />}
@@ -185,47 +198,8 @@ export function RegionDashboard({ data }: { data: RegionAnalysisOutput }) {
         </div>
       )}
 
-      {/* Бюджет — денежная основа, сразу подкрепляет выводы синтеза */}
-      <div id="budget" className="scroll-mt-56">
-        <BudgetSection landscape={data.budgetLandscape} />
-      </div>
-
-      {/* Инфографика из реальных чисел (доли ВРП, структура бюджета) — рядом с цифрами */}
-      {data.visuals && data.visuals.length > 0 && (
-        <div id="visuals" className="scroll-mt-56">
-          <VisualsSection visuals={data.visuals} />
-        </div>
-      )}
-
-      {/* Что регион закрепил официально и куда движется */}
-      <div id="priorities" className="scroll-mt-56">
-        <PrioritiesSection priorities={data.strategicPriorities} />
-      </div>
-
-      {/* Как может развиваться регион */}
-      <div id="scenarios" className="scroll-mt-56">
-        <ScenariosSection scenarios={data.regionalScenarios} />
-      </div>
-
-      {/* Реальная экономика: отрасли и крупные организации */}
-      <div id="industries" className="scroll-mt-56">
-        <IndustrySection items={data.industryBreakdown} />
-      </div>
-
-      {data.keyPlayers && data.keyPlayers.length > 0 && (
-        <div id="key-players" className="scroll-mt-56">
-          <KeyPlayersSection players={data.keyPlayers} />
-        </div>
-      )}
-
-      {/* Кто принимает решения */}
-      <div id="stakeholders" className="scroll-mt-56">
-        <StakeholderSection stakeholders={data.stakeholderMap} />
-      </div>
-
-      <div id="competition" className="scroll-mt-56">
-        <CompetitionSection competitors={data.competitiveLandscape} />
-      </div>
+      {/* Классические блоки — порядок адаптируется под тип региона */}
+      {classicOrder.map((key) => renderClassicSection(key, data))}
 
       {/* Источники */}
       <div id="sources" className="scroll-mt-56">
@@ -233,6 +207,79 @@ export function RegionDashboard({ data }: { data: RegionAnalysisOutput }) {
       </div>
     </div>
   );
+}
+
+function ArchetypeBanner({ archetype, focusAngle }: { archetype?: string; focusAngle?: string }) {
+  if (!archetype?.trim() && !focusAngle?.trim()) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-2xl border border-primary/15 bg-gradient-to-r from-primary/[0.06] to-transparent px-4 py-2.5">
+      {archetype?.trim() && (
+        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-primary/[0.12] px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-primary ring-1 ring-primary/20">
+          <Compass className="size-3.5" /> {archetype}
+        </span>
+      )}
+      {focusAngle?.trim() && <p className="min-w-0 flex-1 text-xs font-medium leading-snug">{focusAngle}</p>}
+    </div>
+  );
+}
+
+// Рендер «классического» блока по ключу. Visuals и keyPlayers идут спутниками
+// бюджета и отраслей соответственно, чтобы держаться рядом со своими данными.
+function renderClassicSection(key: string, data: RegionAnalysisOutput): ReactNode {
+  switch (key) {
+    case "budget":
+      return (
+        <Fragment key="budget">
+          <div id="budget" className="scroll-mt-56">
+            <BudgetSection landscape={data.budgetLandscape} />
+          </div>
+          {data.visuals && data.visuals.length > 0 && (
+            <div id="visuals" className="scroll-mt-56">
+              <VisualsSection visuals={data.visuals} />
+            </div>
+          )}
+        </Fragment>
+      );
+    case "priorities":
+      return (
+        <div key="priorities" id="priorities" className="scroll-mt-56">
+          <PrioritiesSection priorities={data.strategicPriorities} />
+        </div>
+      );
+    case "scenarios":
+      return (
+        <div key="scenarios" id="scenarios" className="scroll-mt-56">
+          <ScenariosSection scenarios={data.regionalScenarios} />
+        </div>
+      );
+    case "industries":
+      return (
+        <Fragment key="industries">
+          <div id="industries" className="scroll-mt-56">
+            <IndustrySection items={data.industryBreakdown} />
+          </div>
+          {data.keyPlayers && data.keyPlayers.length > 0 && (
+            <div id="key-players" className="scroll-mt-56">
+              <KeyPlayersSection players={data.keyPlayers} />
+            </div>
+          )}
+        </Fragment>
+      );
+    case "stakeholders":
+      return (
+        <div key="stakeholders" id="stakeholders" className="scroll-mt-56">
+          <StakeholderSection stakeholders={data.stakeholderMap} />
+        </div>
+      );
+    case "competition":
+      return (
+        <div key="competition" id="competition" className="scroll-mt-56">
+          <CompetitionSection competitors={data.competitiveLandscape} />
+        </div>
+      );
+    default:
+      return null;
+  }
 }
 
 function RegionHero({ summary }: { summary: RegionAnalysisOutput["regionSummary"] }) {

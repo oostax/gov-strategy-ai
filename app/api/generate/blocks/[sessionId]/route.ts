@@ -30,7 +30,12 @@ export async function GET(
 
     const state = await getBlocksState(sessionId, runId);
     if (state) {
-      const blocks = BLOCK_ORDER.map((kind) => {
+      // Адаптивная композиция: показываем прогресс по реально запланированным блокам,
+      // а не по всем возможным — иначе прогресс не дойдёт до 100%.
+      const plannedKinds = state.plan?.blocks?.length
+        ? state.plan.blocks.map((b) => b.kind)
+        : BLOCK_ORDER;
+      const blocks = plannedKinds.map((kind) => {
         const bs = state.blocks.find((b) => b.kind === kind);
         const ready = state.readyBlocks.find((r) => r.kind === kind);
         return {
@@ -76,7 +81,7 @@ export async function GET(
       }
 
       const readyCount = blocks.filter((block) => block.status === "ready").length;
-      const total = BLOCK_ORDER.length;
+      const total = plannedKinds.length;
       return NextResponse.json({
         status: "generating",
         sessionId,

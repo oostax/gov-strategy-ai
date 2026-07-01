@@ -8,34 +8,44 @@ import {
   BLOCK_LABELS,
   BLOCK_DEPENDENCIES,
   BLOCK_ORDER,
+  CLASSIC_SECTION_KINDS,
   type BlockKind,
   type BlockPlan,
   type RegionBlocksPlan,
 } from "./types";
 
-const PLANNER_PROMPT = `Ты — планировщик регионального анализа. Твоя задача: составить план генерации и поисковые запросы для анализа региона.
+const PLANNER_PROMPT = `Ты — планировщик регионального анализа. Твоя задача: определить ТИП региона, сфокусировать анализ и собрать план генерации с поисковыми запросами.
 
-Типы блоков (в порядке сборки):
-1. "summary" — карточка региона (название, ФО полностью, население, бюджет) + ключевой тезис
-2. "budget" — бюджетный ландшафт: доходы, расходы, статьи, госпрограммы с суммами
-3. "industries" — 3-5 ключевых отраслей с конкретными предприятиями и подтверждёнными ограничениями
-4. "priorities" — стратегические приоритеты из стратегии СЭР, нацпроектов, указов губернатора
-5. "scenarios" — 3-4 сценария развития региона на 5 лет с триггерами
-6. "competition" — поставщики и конкурирующие решения в регионе с конкретными доказательствами (контракты, проекты)
-7. "stakeholders" — руководители региона: губернатор, заместители губернатора, региональные министры с подтверждением должности
+Сначала классифицируй регион (archetype) — один из:
+- "промышленный" — опора на обрабатывающую промышленность/ВПК/металлургию
+- "ресурсно-сырьевой" — нефть, газ, добыча, металлы
+- "аграрный" — АПК, сельское хозяйство — ядро экономики
+- "моногород" / "моноэкономика" — зависимость от одного предприятия/отрасли
+- "дотационный" — высокая доля федеральных трансфертов, слабая собственная база
+- "диверсифицированный" — сбалансированная экономика крупного региона
+- "логистический/приграничный" — транзит, порты, границы
+- "туристический" — туризм/рекреация значимы
+Если не уверен — выбери ближайший, не выдумывай новых.
 
-Для КАЖДОГО блока составь 2-3 поисковых запроса на русском языке,
-максимально конкретные под тему блока и регион.
-Используй site: для региональных доменов.
-Во всех запросах используй полное официальное название субъекта Российской Федерации.
+Затем сформулируй focusAngle — ОДНУ фразу: на чём реально держится стратегическая картина именно этого региона (без общих слов).
+
+Затем задай sectionOrder — порядок «классических» блоков под этот тип региона, от самого важного к менее важному. Доступные ключи:
+"budget", "industries", "priorities", "scenarios", "competition", "stakeholders".
+Правила sectionOrder:
+- ОБЯЗАТЕЛЬНО включи: budget, industries, priorities, scenarios (порядок между ними — на твоё усмотрение под тип региона).
+- competition и stakeholders — включай ТОЛЬКО если они реально релевантны (competition — если есть внешние поставщики/подрядчики; stakeholders — если фигуры руководителей значимы для решения). Если нерелевантно — не включай, это нормально.
+- Веди тем, что важнее для этого архетипа: дотационный → сначала budget; моногород/промышленный → сначала industries; и т.д.
+
+Для КАЖДОГО блока из sectionOrder плюс "summary" составь 2-3 конкретных поисковых запроса на русском под тему блока и регион. Используй полное официальное название субъекта РФ.
 
 Верни ТОЛЬКО JSON:
 {
+  "archetype": "промышленный",
+  "focusAngle": "одна фраза про суть региона",
+  "sectionOrder": ["industries", "budget", "scenarios", "priorities", "competition"],
   "blocks": [
-    {
-      "kind": "summary",
-      "searchQueries": ["запрос 1", "запрос 2", "запрос 3"]
-    }
+    { "kind": "summary", "searchQueries": ["запрос 1", "запрос 2"] },
+    { "kind": "industries", "searchQueries": ["запрос 1", "запрос 2"] }
   ]
 }
 
@@ -89,7 +99,12 @@ export async function planRegionBlocks(
     responseFormat: "json_object",
   });
 
-  let parsed: { blocks?: Array<{ kind: string; searchQueries: string[] }> };
+  let parsed: {
+    archetype?: string;
+    focusAngle?: string;
+    sectionOrder?: string[];
+    blocks?: Array<{ kind: string; searchQueries: string[] }>;
+  };
   try {
     const cleaned = raw
       .replace(/^```json\s*/i, "")
@@ -98,61 +113,62 @@ export async function planRegionBlocks(
       .trim();
     parsed = JSON.parse(cleaned);
   } catch {
-    parsed = { blocks: [] };
-  }
-
-  if (!parsed.blocks || !Array.isArray(parsed.blocks)) {
-    parsed.blocks = BLOCK_ORDER.map((kind) => ({
-      kind,
-      searchQueries: [],
-    }));
+    parsed = {};
   }
 
   const isBlockKind = (value: string): value is BlockKind =>
     (BLOCK_ORDER as readonly string[]).includes(value);
 
-  const blocks: BlockPlan[] = parsed.blocks
-    .filter((b): b is { kind: string; searchQueries: string[] } =>
-      isBlockKind(b.kind),
-    )
-    .map((b) => {
-      const kind = b.kind as BlockPlan["kind"];
-      return {
-        kind,
-        label: BLOCK_LABELS[kind] || b.kind,
-        searchQueries: normalizeBlockQueries(kind, b.searchQueries, regionName, playbookQueries, knownStakeholders).slice(0, 5),
-        dependsOn: BLOCK_DEPENDENCIES[kind] || [],
-      };
-    });
+  // Обязательные «классические» блоки — их требует гейт готовности сборки.
+  const coreClassic: BlockKind[] = ["budget", "industries", "priorities", "scenarios"];
 
-  if (!blocks.length) {
-    blocks.push(
-      ...BLOCK_ORDER.map((kind) => ({
-        kind,
-        label: BLOCK_LABELS[kind],
-        searchQueries: [`${regionName} ${focusTopic} ${kind}`],
-        dependsOn: BLOCK_DEPENDENCIES[kind] || [],
-      })),
-    );
+  // 1) Порядок классических блоков под архетип (competition/stakeholders — опционально).
+  const requested = Array.isArray(parsed.sectionOrder)
+    ? parsed.sectionOrder.filter(isBlockKind).filter((k) => CLASSIC_SECTION_KINDS.includes(k))
+    : [];
+  const seen = new Set<BlockKind>();
+  const sectionOrder: BlockKind[] = [];
+  for (const kind of requested) {
+    if (!seen.has(kind)) { seen.add(kind); sectionOrder.push(kind); }
+  }
+  for (const kind of coreClassic) {
+    if (!seen.has(kind)) { seen.add(kind); sectionOrder.push(kind); }
+  }
+  const finalOrder: BlockKind[] = sectionOrder.length ? sectionOrder : [...CLASSIC_SECTION_KINDS];
+
+  // 2) Набор блоков для генерации: summary + выбранные классические.
+  const genSet = new Set<BlockKind>(["summary", ...finalOrder]);
+
+  // 3) Запросы планировщика по kind.
+  const queryByKind = new Map<BlockKind, string[]>();
+  if (Array.isArray(parsed.blocks)) {
+    for (const b of parsed.blocks) {
+      if (b && typeof b.kind === "string" && isBlockKind(b.kind) && Array.isArray(b.searchQueries)) {
+        queryByKind.set(b.kind, b.searchQueries);
+      }
+    }
   }
 
-  const planned = new Set(blocks.map((block) => block.kind));
-  for (const kind of BLOCK_ORDER) {
-    if (planned.has(kind)) continue;
-    blocks.push({
-      kind,
-      label: BLOCK_LABELS[kind],
-      searchQueries: normalizeBlockQueries(kind, [], regionName, playbookQueries, knownStakeholders).slice(0, 5),
-      dependsOn: BLOCK_DEPENDENCIES[kind] || [],
-    });
-  }
+  // Собираем только выбранные блоки, в порядке сборки (BLOCK_ORDER — для волн/зависимостей).
+  const blocks: BlockPlan[] = BLOCK_ORDER.filter((kind) => genSet.has(kind)).map((kind) => ({
+    kind,
+    label: BLOCK_LABELS[kind],
+    searchQueries: normalizeBlockQueries(kind, queryByKind.get(kind) ?? [], regionName, playbookQueries, knownStakeholders).slice(0, 5),
+    dependsOn: BLOCK_DEPENDENCIES[kind] || [],
+  }));
+
+  const archetype = typeof parsed.archetype === "string" ? parsed.archetype.trim().slice(0, 60) : "";
+  const focusAngle = typeof parsed.focusAngle === "string" ? parsed.focusAngle.trim().slice(0, 240) : "";
 
   return {
     sessionId: session.id,
     region: regionName,
     focusTopic,
-    blocks: BLOCK_ORDER.map((kind) => blocks.find((block) => block.kind === kind)!).filter(Boolean),
+    blocks,
     createdAt: new Date().toISOString(),
+    archetype: archetype || undefined,
+    focusAngle: focusAngle || undefined,
+    sectionOrder: finalOrder,
   };
 }
 
@@ -173,6 +189,7 @@ export function fallbackRegionBlocksPlan(
       dependsOn: BLOCK_DEPENDENCIES[kind] || [],
     })),
     createdAt: new Date().toISOString(),
+    sectionOrder: [...CLASSIC_SECTION_KINDS],
   };
 }
 

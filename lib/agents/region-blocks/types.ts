@@ -82,7 +82,35 @@ export interface RegionBlocksPlan {
   focusTopic: string;
   blocks: BlockPlan[];
   createdAt: string;
+  /** Адаптивная композиция: тип региона (моногород/дотационный/промышленный/…) */
+  archetype?: string;
+  /** Одна фраза: на чём держится анализ именно этого региона */
+  focusAngle?: string;
+  /** Порядок «классических» блоков под архетип (budget/industries/priorities/scenarios/competition/stakeholders) */
+  sectionOrder?: BlockKind[];
 }
+
+/** «Классические» блоки, порядок которых может адаптироваться под архетип. */
+export const CLASSIC_SECTION_KINDS: BlockKind[] = [
+  "budget",
+  "industries",
+  "priorities",
+  "scenarios",
+  "competition",
+  "stakeholders",
+];
+
+/** Блоки, которые всегда нужны для сборки (см. assertRegionOutputReady). */
+export const CORE_BLOCK_KINDS: BlockKind[] = [
+  "summary",
+  "budget",
+  "industries",
+  "priorities",
+  "scenarios",
+];
+
+/** Блоки, которые можно безопасно не генерировать (не входят в гейт готовности). */
+export const OPTIONAL_BLOCK_KINDS: BlockKind[] = ["competition", "stakeholders"];
 
 // ─── Individual block outputs ────────────────────────────────────────────────
 

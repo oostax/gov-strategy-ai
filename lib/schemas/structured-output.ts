@@ -462,6 +462,10 @@ export interface RegionEmergingOpportunity {
 
 export interface RegionAnalysisOutput {
   regionSummary: RegionSummary;
+  // Адаптивная композиция: тип региона, фокус анализа и порядок «классических» блоков.
+  regionArchetype?: string;
+  focusAngle?: string;
+  sectionOrder?: string[];
   coreThesis?: RegionCoreThesis;
   industryBreakdown: IndustryBreakdown[];
   budgetLandscape: BudgetLandscape;

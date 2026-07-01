@@ -366,6 +366,10 @@ async function continueBlocksGeneration(
   run = await updateRun(run, { status: "assembling" });
   const blocks = await collectReadyBlocks(run);
   const assembled = assembleRegionBlocks({ regionName: plan.region, blocks });
+  // Адаптивная композиция: тип региона, фокус и порядок блоков — из плана в вывод.
+  if (plan.archetype) assembled.regionArchetype = plan.archetype;
+  if (plan.focusAngle) assembled.focusAngle = plan.focusAngle;
+  if (plan.sectionOrder?.length) assembled.sectionOrder = plan.sectionOrder;
   try {
     const insights = await synthesizeRegionInsights(assembled);
     if (insights.coreThesis) assembled.coreThesis = insights.coreThesis;
