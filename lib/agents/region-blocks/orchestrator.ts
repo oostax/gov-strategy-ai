@@ -370,24 +370,48 @@ async function continueBlocksGeneration(
   if (plan.archetype) assembled.regionArchetype = plan.archetype;
   if (plan.focusAngle) assembled.focusAngle = plan.focusAngle;
   if (plan.sectionOrder?.length) assembled.sectionOrder = plan.sectionOrder;
+  // Синтез — обогащающий слой, но не критичный. Ограничиваем по времени, чтобы
+  // медленная/перегруженная модель не блокировала завершение генерации на минуты.
   try {
-    const insights = await synthesizeRegionInsights(assembled);
+    const synthesisTimeoutMs = Number(process.env.BLOCK_SYNTHESIS_TIMEOUT_MS || 60_000);
+    const insights = await withTimeout(
+      synthesizeRegionInsights(assembled),
+      synthesisTimeoutMs,
+      `Synthesis timeout after ${synthesisTimeoutMs}ms`,
+    );
     if (insights.coreThesis) assembled.coreThesis = insights.coreThesis;
     if (insights.claims?.length) assembled.claims = insights.claims;
     if (insights.strategyRealityGap?.length) assembled.strategyRealityGap = insights.strategyRealityGap;
   } catch (err) {
-    console.warn("[blocks][synthesis] failed", err);
+    console.warn("[blocks][synthesis] skipped", err);
   }
   // Привязка «факт → источник → уверенность»: числам бюджета/сценариев/приоритетов
   // проставляем источник из собранных материалов, неподтверждённое уводим в dataGaps.
-  const guardEvidence = (assembled.sources ?? []).map((s) => ({
-    title: s.title,
-    url: s.url ?? "",
-    snippet: s.excerpt ?? null,
-  }));
-  const guarded = guardRegionOutput(assembled, guardEvidence);
-  const output = toTypedRegionOutput(guarded);
-  await writeStructuredOutput(session.id, output);
+  // Сборку оборачиваем: любой сбой здесь должен явно перевести прогон в error,
+  // иначе статус остаётся "assembling" и клиент вечно видит "generating".
+  let output: TypedOutput;
+  try {
+    const guardEvidence = (assembled.sources ?? []).map((s) => ({
+      title: s.title,
+      url: s.url ?? "",
+      snippet: s.excerpt ?? null,
+    }));
+    const guarded = guardRegionOutput(assembled, guardEvidence);
+    output = toTypedRegionOutput(guarded);
+    await writeStructuredOutput(session.id, output);
+  } catch (assemblyError) {
+    const message = assemblyError instanceof Error ? assemblyError.message : String(assemblyError);
+    console.error(`[blocks][assemble] finalize failed: ${message}`);
+    run = await updateRun(run, { status: "error", error: { message } });
+    await logBlockEvent({
+      sessionId: session.id,
+      runId: run.runId,
+      scope: "blocks.assemble",
+      message: "failed",
+      data: { error: message },
+    });
+    throw assemblyError;
+  }
   try {
     const fs = await import("fs/promises");
     await fs.unlink(structuredErrorPath(session.id));
