@@ -2,8 +2,6 @@
 
 import { BarChart3, GitBranch, LayoutGrid, Rows3 } from "lucide-react";
 import {
-  Bar,
-  BarChart,
   CartesianGrid,
   Cell,
   ReferenceArea,
@@ -72,7 +70,7 @@ export function VisualsSection({ visuals }: { visuals: OutputVisual[] }) {
   if (!useful.length) return null;
 
   return (
-    <div className="grid gap-3 lg:grid-cols-2">
+    <div className="grid min-w-0 gap-3 lg:grid-cols-2">
       {useful.map((visual, idx) => (
         <VisualCard key={`${visual.id ?? "v"}-${idx}`} visual={visual} />
       ))}
@@ -106,7 +104,7 @@ function VisualCard({ visual }: { visual: OutputVisual }) {
   const items = (visual.items ?? []).filter(hasLabel);
 
   return (
-    <Card className="rounded-2xl">
+    <Card className="min-w-0 rounded-2xl">
       <CardContent className="p-4">
         <div className="mb-3">
           <h3 className="flex items-center gap-2 text-sm font-semibold">
@@ -150,7 +148,7 @@ function MatrixChart({ visual, items }: { visual: OutputVisual; items: VisualIte
 
   return (
     <div>
-      <div className="h-64">
+      <div className="h-64 min-w-0 w-full">
         <ResponsiveContainer width="100%" height="100%">
           <ScatterChart margin={{ top: 12, right: 16, bottom: 24, left: 4 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={COLOR.grid} />
@@ -273,35 +271,38 @@ function BarVisual({ items }: { items: VisualItem[] }) {
     const label = item.label ?? "";
     return {
       label,
-      shortLabel: label.length > 18 ? `${label.slice(0, 17)}…` : label,
       display: displayNumber(item) ?? 0,
       fill: toneFill[item.tone ?? "neutral"] ?? toneFill.neutral,
       unit: item.unit ?? "",
       description: item.description,
     };
   });
+  const max = Math.max(...data.map((item) => item.display), 1);
 
   return (
-    <div className="h-56">
-      <ResponsiveContainer width="100%" height="100%">
-        <BarChart data={data} margin={{ top: 12, right: 8, left: -16, bottom: 4 }}>
-          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={COLOR.grid} />
-          <XAxis dataKey="shortLabel" tick={{ fontSize: 10 }} interval={0} angle={-12} textAnchor="end" height={48} />
-          <YAxis tick={{ fontSize: 10 }} allowDecimals={false} />
-          <Tooltip
-            formatter={(value, _name, props) => [
-              `${value}${props.payload?.unit ? ` ${props.payload.unit}` : ""}`,
-              props.payload?.label ?? "",
-            ]}
-            labelFormatter={() => ""}
-          />
-          <Bar dataKey="display" radius={[6, 6, 0, 0]}>
-            {data.map((d, idx) => (
-              <Cell key={idx} fill={d.fill} />
-            ))}
-          </Bar>
-        </BarChart>
-      </ResponsiveContainer>
+    <div className="space-y-2">
+      {data.map((item, idx) => {
+        const width = Math.max(4, Math.round((item.display / max) * 100));
+        return (
+          <div key={idx} className="grid gap-1.5">
+            <div className="flex items-center justify-between gap-3">
+              <p className="truncate text-xs font-medium">{item.label}</p>
+              <p className="shrink-0 text-xs font-semibold tabular-nums">
+                {formatNumber(item.display)}{item.unit ? ` ${item.unit}` : ""}
+              </p>
+            </div>
+            <div className="h-2.5 overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full rounded-full"
+                style={{ width: `${width}%`, backgroundColor: item.fill }}
+              />
+            </div>
+            {item.description && (
+              <p className="line-clamp-1 text-[11px] text-muted-foreground">{item.description}</p>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

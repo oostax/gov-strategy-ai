@@ -36,6 +36,7 @@ export const llmCallSchema = z.object({
   messages: z.array(llmMessageSchema),
   temperature: z.number().optional(),
   maxTokens: z.number().optional(),
+  responseFormat: z.enum(["json_object"]).optional(),
 });
 
 export const sessionBundleSchema = z.object({

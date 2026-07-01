@@ -8,11 +8,8 @@ export async function GET() {
   try {
     const regions = await getStorage().listRegions();
     return NextResponse.json({ regions });
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Unknown error" },
-      { status: 500 },
-    );
+  } catch {
+    return NextResponse.json({ error: "Failed to list regions" }, { status: 500 });
   }
 }
 
@@ -23,9 +20,7 @@ export async function POST(request: Request) {
     const region = await getStorage().createRegion(input);
     return NextResponse.json({ region }, { status: 201 });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Invalid request" },
-      { status: 400 },
-    );
+    console.error("[regions] create failed:", error);
+    return NextResponse.json({ error: "Failed to create region" }, { status: 500 });
   }
 }

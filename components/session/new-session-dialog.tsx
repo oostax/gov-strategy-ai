@@ -136,8 +136,8 @@ const quickTemplates: Array<{
   {
     id: "region",
     icon: Map,
-    title: "Первый заход в регион",
-    sub: "ЛПР, боли, точка входа",
+    title: "Анализ региона",
+    sub: "Бюджет, отрасли, приоритеты",
     patch: { taskType: "region_strategy", urgency: "week", detailLevel: "deep" },
   },
 ];
@@ -1090,12 +1090,6 @@ function RegionPicker({
               label="Активных проектов"
               value={`${selectedProfile.activeProjects.length}`}
             />
-            {selectedProfile.digitalMaturity && (
-              <MiniStat
-                label="Цифровая зрелость"
-                value={`${selectedProfile.digitalMaturity}/5`}
-              />
-            )}
           </div>
           {selectedProfile.sberNote && (
             <p className="mt-2 line-clamp-2 text-[11px] italic leading-snug text-muted-foreground">
@@ -1136,7 +1130,7 @@ function RegionDataHints({
     .slice(0, 2);
   const gaps = [
     ...projectGaps.map((project) => `проект «${project.title || "без названия"}»: сумма, владельцы, статус или заметка`),
-    ...stakeholderGaps.map((person) => `ЛПР ${person.fullName || "без ФИО"}: мотивация и риск отказа`),
+    ...stakeholderGaps.map((person) => `ЛПР ${person.fullName || "без ФИО"}: управленческий интерес и риск согласования`),
   ];
 
   if (!gaps.length) return null;

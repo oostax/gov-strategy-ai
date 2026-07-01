@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Briefcase, ArrowRight } from "lucide-react";
 import type { RegionProfile } from "@/lib/schemas/region";
-import { pickRelevantSberProjects } from "@/lib/storage/sber-projects";
+import { pickStrictRelevantSberProjects } from "@/lib/storage/sber-projects";
 import { SberProjectCard } from "./sber-project-card";
 
 /**
@@ -17,7 +17,7 @@ export function RelevantSberProjects({ region }: { region: RegionProfile }) {
     ...(region.federalProjects ?? []),
   ].join(" ");
 
-  const projects = pickRelevantSberProjects(text, region.name, 4);
+  const projects = pickStrictRelevantSberProjects(text, region.name, 4);
   if (!projects.length) return null;
 
   return (

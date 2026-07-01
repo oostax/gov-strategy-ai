@@ -268,6 +268,21 @@ function scoreRelevance(project: SberGovProject, text: string): number {
   return project.domains.reduce((acc, d) => (t.includes(d) ? acc + 1 : acc), 0);
 }
 
+export function pickStrictRelevantSberProjects(
+  focusTopic?: string,
+  region?: string,
+  limit = 4,
+  catalog: SberGovProject[] = sberGovProjects,
+): SberGovProject[] {
+  const text = `${focusTopic ?? ""} ${region ?? ""}`;
+  return [...catalog]
+    .map((p) => ({ p, score: scoreRelevance(p, text) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((item) => item.p);
+}
+
 /**
  * Подбор наиболее релевантных теме/региону проектов Сбера (объекты, для UI и промпта).
  * Если совпадений мало — добивает «ядром» (ГосТех, аналитика, GigaChat).

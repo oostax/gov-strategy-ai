@@ -9,9 +9,12 @@ import {
   urgencyLevels,
 } from "@/lib/schemas/session";
 import { getStorage } from "@/lib/storage/local-json-storage";
+import { tryParseJson } from "@/lib/utils/json";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
+
+const MAX_PHRASE_LENGTH = 2000;
 
 const systemPrompt = `Ты — помощник руководителя департамента по работе с госсектором Сбербанка.
 Ты получаешь одну фразу руководителя и должен предложить заполнение формы "Новая стратегическая сессия".
@@ -44,9 +47,9 @@ ${Object.entries(taskLabels)
 - Если фраза содержит слово "встреча", "подготовка к встрече", "едем к", "идём к", "завтра у", выбери meeting_preparation.
 - Если "после встречи", "итоги", "фиксируем договорённости", выбери meeting_followup.
 - Если "для ВП", "позиция для правления", выбери executive_brief.
-- Если "анализ региона", "первый заход в", "изучить регион", "понять регион", "разбор региона", выбери region_strategy.
+- Если "анализ региона", "изучить регион", "понять регион", "разбор региона", выбери region_strategy.
 - Если "саммари по региону", "обзор региона", "отрасли региона", "приоритеты региона", "бюджет региона", "структура бюджета", "стратегия региона", "что происходит в регионе" — это информационно-аналитический срез о самом регионе, выбери region_strategy.
-- Если "стратегия Сбера в регионе", "портфель Сбера", "что продаём в регионе", "план захода Сбера", "обновить стратегию по региону" — речь про действия Сбера, выбери sber_region_strategy.
+- Если "стратегия Сбера в регионе", "портфель Сбера", "что продаём в регионе", "план действий Сбера", "обновить стратегию Сбера по региону" — речь про действия Сбера, выбери sber_region_strategy.
 - Если упомянут регион (область, край, республика, город федерального значения) и НЕТ встречи/ВП/сценариев/ставок — по умолчанию выбери region_strategy (аналитический срез), а не strategic_bets.
 - Если "куда идти", "выбрать направление", "ставки", выбери strategic_bets.
 - Если "сценарии", "что если", "при изменении ФЗ", выбери scenario_analysis.
@@ -59,7 +62,10 @@ export async function POST(request: Request) {
   try {
     const { phrase } = (await request.json()) as { phrase?: string };
     if (!phrase || phrase.trim().length < 3) {
-      return NextResponse.json({ error: "Фраза слишком короткая" }, { status: 400 });
+      return NextResponse.json({ error: "Phrase too short" }, { status: 400 });
+    }
+    if (phrase.length > MAX_PHRASE_LENGTH) {
+      return NextResponse.json({ error: "Phrase too long" }, { status: 400 });
     }
     const regions = await getStorage().listRegions();
     const regionHints = regions
@@ -78,26 +84,10 @@ export async function POST(request: Request) {
       ],
     });
 
-    // Парсим, отрезаем возможные markdown-фенсы на всякий случай.
-    const json = raw
-      .replace(/^```json\s*/i, "")
-      .replace(/^```\s*/i, "")
-      .replace(/```\s*$/i, "")
-      .trim();
-    let parsed: Record<string, unknown>;
-    try {
-      parsed = JSON.parse(json) as Record<string, unknown>;
-    } catch {
-      return NextResponse.json(
-        { error: "Модель вернула невалидный JSON", raw },
-        { status: 502 },
-      );
-    }
+    const parsed = tryParseJson<Record<string, unknown>>(raw);
     return NextResponse.json({ suggestion: parsed });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Classify error" },
-      { status: 500 },
-    );
+    console.error("[classify]", error);
+    return NextResponse.json({ error: "Classification failed" }, { status: 500 });
   }
 }

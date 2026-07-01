@@ -1,12 +1,9 @@
 import Link from "next/link";
 import {
   ArrowRight,
-  BarChart3,
   Building2,
-  CalendarDays,
   ChevronRight,
   MapPin,
-  Sparkles,
   TrendingUp,
   Users,
   Zap,
@@ -133,9 +130,7 @@ export default async function Home() {
                             <Building2 className="size-3" />
                             {region.activeProjects.length}
                           </span>
-                          {region.digitalMaturity && (
-                            <span>{region.digitalMaturity}/5</span>
-                          )}
+                          {region.budgetProfile && <span>{region.budgetProfile}</span>}
                         </div>
                       </div>
                     </div>
@@ -152,7 +147,6 @@ export default async function Home() {
 }
 
 function StatCard({
-  icon: Icon,
   value,
   label,
 }: {

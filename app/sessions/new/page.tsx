@@ -6,49 +6,28 @@ import {
   ArrowLeft,
   ArrowRight,
   BarChart3,
-  BookOpen,
   BriefcaseBusiness,
   Building2,
-  CalendarClock,
   CheckCircle2,
   ClipboardCheck,
-  Globe,
   Loader2,
   Map,
   MapPin,
-  MessageSquareText,
   Mic,
-  Route,
-  Send,
-  Sparkles,
   Target,
-  Timer,
-  User,
   UsersRound,
   Wand2,
-  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  constraintOptions,
-  deliveryFormatLabels,
-  deliveryFormatSubLabels,
-  deliveryFormats,
-  horizons,
   taskFocusPlaceholder,
   taskLabels,
   taskOutputDescription,
   taskWhenToUse,
-  urgencyLabels,
-  urgencyLevels,
-  urgencySubLabels,
   type CreateSessionInput,
-  type DeliveryFormat,
   type TaskType,
-  type UrgencyLevel,
 } from "@/lib/schemas/session";
 import { cn } from "@/lib/utils";
 import { searchRegions } from "@/lib/data/russian-regions";
@@ -90,18 +69,12 @@ export default function NewSessionPage() {
     taskType,
     horizon,
     detailLevel,
-    urgency,
-    deliveryFormat,
     region,
     regionId,
-    selectedConstraints,
     needsHorizon,
     isMeeting,
     submit,
-    toggleConstraint,
     selectRegion,
-    goNext,
-    goBack,
     setStep,
     validateCurrentStep,
     applySuggestion,
@@ -468,7 +441,7 @@ function RegionDataHints({
     .slice(0, 2);
   const gaps = [
     ...projectGaps.map((project) => `проект «${project.title || "без названия"}»: сумма, владельцы или статус`),
-    ...stakeholderGaps.map((person) => `ЛПР ${person.fullName || "без ФИО"}: мотивация и риск отказа`),
+    ...stakeholderGaps.map((person) => `ЛПР ${person.fullName || "без ФИО"}: управленческий интерес и риск согласования`),
   ];
 
   if (!gaps.length) return null;

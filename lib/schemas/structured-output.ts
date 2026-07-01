@@ -247,21 +247,18 @@ export interface RegionSummary {
   federalDistrict: string;
   population: string;
   budgetTotal: string;
-  digitalMaturity: string;
   oneLiner: string;
 }
 
 export interface IndustryBreakdown {
   id: string;
   name: string;
-  shareInGDP: string;
-  keyPlayers: string;
+  keyEnterprises: { name: string; description: string }[];
   currentDigitalState: string;
-  painPoints: string[];
+  limitations: string[];
   sberRelevance: string;
-  dataNeeded: string;
-  // Опционально — числовая доля в ВРП (%) для инфографики. Только из источника.
-  shareValue?: number;
+  source?: string;
+  sourceUrl?: string;
 }
 
 export interface BudgetProgram {
@@ -271,8 +268,9 @@ export interface BudgetProgram {
   budget: string;
   status: string;
   sberRelevance: string;
-  // Опционально — числовой объём программы (млрд ₽) для диаграммы. Только из источника.
   budgetValue?: number;
+  source?: string;
+  sourceUrl?: string;
 }
 
 // Статья структуры бюджета (доход или расход) для диаграммы.
@@ -281,8 +279,12 @@ export interface BudgetBreakdownItem {
   name: string;
   kind: "income" | "expense";
   value: number;
+  valueRaw?: number;
   unit?: string;
-  share?: string;
+  share?: string | number;
+  source?: string;
+  sourceUrl?: string;
+  evidence?: string;
 }
 
 export interface BudgetLandscape {
@@ -291,10 +293,18 @@ export interface BudgetLandscape {
   keyPrograms: BudgetProgram[];
   upcomingTenders: string;
   dataNeeded: string;
-  // Опционально — структура доходов/расходов в числах для диаграммы. Только из источника.
   breakdown?: BudgetBreakdownItem[];
   totalIncomeValue?: number;
   totalExpenseValue?: number;
+  history?: {
+    years: string[];
+    income: (number | null)[];
+    expense: (number | null)[];
+    deficit?: (number | null)[];
+    source?: string;
+    sourceUrl?: string;
+  };
+  aiHighlights?: string[];
 }
 
 export interface RegionStakeholder {
@@ -302,11 +312,12 @@ export interface RegionStakeholder {
   name: string;
   role: string;
   department: string;
-  motivation: string;
-  pain: string;
+  achievements: string;
+  recentNews: string;
+  managedBudget?: string;
+  managementInterest: string;
   relationshipToSber: string;
-  redFlags: string;
-  howToEngage: string;
+  engagementPrinciple: string;
 }
 
 export interface Competitor {
@@ -317,6 +328,12 @@ export interface Competitor {
   stage: string;
   threatLevel: string;
   sberAdvantage: string;
+  evidence?: string;
+  incumbentPosition?: string;
+  decisionCriteria?: string[];
+  riskForSber?: string;
+  sberCounterPosition?: string;
+  nextCheck?: string;
 }
 
 export interface EntryPoint {
@@ -326,6 +343,8 @@ export interface EntryPoint {
   stakeholder: string;
   firstAction: string;
   confidence: string;
+  evidence?: string;
+  validationQuestion?: string;
 }
 
 export interface DataGap {
@@ -334,6 +353,7 @@ export interface DataGap {
   howToGet: string;
   priority: string;
   owner: string;
+  sourceHint?: string;
 }
 
 // Приоритет региона на горизонте 5 лет (для дорожной карты приоритетов).
@@ -345,10 +365,112 @@ export interface PriorityHorizon {
   source?: string;
 }
 
+export interface RegionalScenario {
+  id: string;
+  title: string;
+  probability: "high" | "medium" | "low";
+  horizon: string;
+  trigger: string;
+  regionMoves: string[];
+  budgetImplication: string;
+  industryImpact: string;
+  sberPosture: string;
+  earlySignals: string[];
+  evidence?: string[];
+  sources?: { title: string; url?: string; excerpt: string }[];
+}
+
+// ── Слой 1: центральный контринтуитивный тезис ────────────────────────────────
+// Один парадокс, удерживающий весь анализ: X маскирует Y.
+export interface RegionCoreThesis {
+  headline: string;
+  surfaceSignal: string;
+  hiddenReality: string;
+  soWhat: string;
+  evidence?: string[];
+  sources?: { title: string; url?: string; excerpt: string }[];
+}
+
+// ── Слой 2: цепочка «цифра → следствие → решение» ──────────────────
+export interface RegionClaim {
+  id: string;
+  metric: string;
+  metricValue?: number;
+  direction?: "up" | "down" | "flat";
+  implication: string;
+  decision: string;
+  confidence?: "high" | "medium" | "low";
+  source?: string;
+  sourceUrl?: string;
+}
+
+// ── Слой 3: ключевые игроки региона с финансовыми фактами ────────────
+export interface RegionKeyPlayer {
+  id: string;
+  name: string;
+  sector: string;
+  role: "dominant" | "challenger" | "distressed" | "emerging";
+  financials: { label: string; value: string; valueNum?: number }[];
+  sberAngle: string;
+  source?: string;
+  sourceUrl?: string;
+}
+
+// ── Слой 4: разрыв «замысел стратегии vs факт» ─────────────────
+export interface RegionStrategyRealityGap {
+  id: string;
+  dimension: string;
+  strategyIntent: string;
+  actualFact: string;
+  gapMagnitude?: string;
+  source?: string;
+  sourceUrl?: string;
+}
+
+// ── Слой 5: матрица решений с зонированием по осям ───────────────
+export interface RegionDecisionMatrixCell {
+  id: string;
+  quadrant: string;
+  zone: "expand" | "hold" | "restrict" | "watch";
+  target: string;
+  rationale: string;
+  metricHook?: string;
+  source?: string;
+  sourceUrl?: string;
+}
+
+export interface RegionDecisionMatrix {
+  title: string;
+  xAxis: { label: string; lowLabel?: string; highLabel?: string };
+  yAxis: { label: string; lowLabel?: string; highLabel?: string };
+  cells: RegionDecisionMatrixCell[];
+}
+
+// ── Слой 6: forward-looking ниши с оценкой объёма рынка ───────────
+export interface RegionEmergingOpportunity {
+  id: string;
+  name: string;
+  description: string;
+  marketSize?: string;
+  marketSizeNum?: number;
+  horizon: string;
+  readiness?: "pilot" | "early" | "scaling";
+  sberAngle: string;
+  source?: string;
+  sourceUrl?: string;
+}
+
 export interface RegionAnalysisOutput {
   regionSummary: RegionSummary;
+  coreThesis?: RegionCoreThesis;
   industryBreakdown: IndustryBreakdown[];
   budgetLandscape: BudgetLandscape;
+  regionalScenarios?: RegionalScenario[];
+  claims?: RegionClaim[];
+  keyPlayers?: RegionKeyPlayer[];
+  strategyRealityGap?: RegionStrategyRealityGap[];
+  decisionMatrix?: RegionDecisionMatrix;
+  emergingOpportunities?: RegionEmergingOpportunity[];
   stakeholderMap: RegionStakeholder[];
   competitiveLandscape: Competitor[];
   entryPoints: EntryPoint[];
@@ -356,7 +478,6 @@ export interface RegionAnalysisOutput {
     confirmed: string[];
     hypothesized: string[];
     source: string;
-    // Опционально — приоритеты на горизонт 5 лет с периодом и привязкой к нацпроектам.
     roadmap?: PriorityHorizon[];
   };
   dataGaps: DataGap[];

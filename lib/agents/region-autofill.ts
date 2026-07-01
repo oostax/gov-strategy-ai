@@ -2,7 +2,7 @@
  * Автозаполнение карточки региона из открытых источников.
  *
  * Берём уже готовый веб-поиск с фильтром релевантности (retrieveOpenSources),
- * и одним вызовом LLM раскладываем найденное в поля карточки: приоритеты, боли,
+ * и одним вызовом LLM раскладываем найденное в поля карточки: приоритеты, ограничения,
  * свежую повестку и карту ЛПР. Результат — ЧЕРНОВИК: в генерацию он идёт только
  * как гипотеза, пока человек не подтвердит элементы вручную.
  */
@@ -101,12 +101,12 @@ export async function buildRegionDraft(regionName: string): Promise<RegionDraft>
           role: "user",
           content: [
             "Схема JSON:",
-            `{"federalDistrict":"федеральный округ или пусто","population":"население (напр. ~1.0 млн) или пусто","digitalMaturity":1-5 или null,"digitalMaturityNote":"кратко обоснование оценки или пусто","budgetProfile":"кратко про бюджет региона или пусто","budgetCycle":"когда формируется бюджет / окно подачи или пусто","topPriorities":[{"title":"приоритет региона до 120 символов","source":"кратко: откуда (домен/документ)"}],"painPoints":["боль/узкое место до 140 символов"],"news":[{"title":"свежее событие","source":"домен","url":"ссылка или пусто","date":"если есть"}],"stakeholders":[{"fullName":"ФИО","role":"должность","department":"ведомство","motivation":"мотив/зона ответственности, если ясно из источника"}]}`,
+            `{"federalDistrict":"федеральный округ или пусто","population":"население (напр. ~1.0 млн) или пусто","budgetProfile":"кратко про бюджет региона или пусто","budgetCycle":"когда формируется бюджет / окно подачи или пусто","topPriorities":[{"title":"приоритет региона до 120 символов","source":"кратко: откуда (домен/документ)"}],"painPoints":["ограничение или узкое место до 140 символов"],"news":[{"title":"свежее событие","source":"домен","url":"ссылка или пусто","date":"если есть"}],"stakeholders":[{"fullName":"ФИО","role":"должность","department":"ведомство","motivation":"зона ответственности или управленческий интерес, если ясно из источника"}]}`,
             "",
             "Правила:",
             "- ЛПР: только реальные публичные должностные лица (губернатор, министры, зампреды), подтверждённые источником. Без выдуманных ФИО.",
             "- Максимум по 6 элементов в каждом массиве.",
-            "- Приоритеты и боли — конкретные, не лозунги.",
+            "- Приоритеты и ограничения — конкретные, не лозунги.",
             "- Контекстные поля (округ, население, бюджет, зрелость) — только если есть в источниках; иначе пусто/null.",
             "",
             `Регион: ${name}`,
@@ -183,21 +183,12 @@ export async function buildRegionDraft(regionName: string): Promise<RegionDraft>
     .filter((item): item is NonNullable<typeof item> => item !== null)
     .slice(0, 6);
 
-  // Контекстные скаляры — берём, только если непустые.
-  const digitalMaturityRaw = Number(parsed.digitalMaturity);
-  const digitalMaturity =
-    Number.isFinite(digitalMaturityRaw) && digitalMaturityRaw >= 1 && digitalMaturityRaw <= 5
-      ? Math.round(digitalMaturityRaw)
-      : undefined;
-
   return {
     generatedAt: nowIso(),
     status: "ready",
     sources,
     federalDistrict: asString(parsed.federalDistrict) || undefined,
     population: asString(parsed.population) || undefined,
-    digitalMaturity,
-    digitalMaturityNote: asString(parsed.digitalMaturityNote) || undefined,
     budgetProfile: asString(parsed.budgetProfile) || undefined,
     budgetCycle: asString(parsed.budgetCycle) || undefined,
     topPriorities,

@@ -4,13 +4,16 @@ import {
   ArrowRight,
   BadgeCheck,
   BarChart3,
+  Building2,
   CalendarDays,
   CheckCircle2,
   ClipboardList,
+  Compass,
   FileText,
   Flag,
   MapPin,
   MessageSquare,
+  Route,
   ShieldCheck,
   Target,
 } from "lucide-react";
@@ -23,15 +26,18 @@ import {
 import type {
   BriefOutput,
   MeetingOutput,
+  RegionAnalysisOutput,
   StructuredOutput,
   TypedOutput,
 } from "@/lib/schemas/structured-output";
 import { cn } from "@/lib/utils";
 
 export function SessionFocusBar({
+  id,
   session,
   output,
 }: {
+  id?: string;
   session: SessionProfile;
   output: TypedOutput;
 }) {
@@ -39,7 +45,10 @@ export function SessionFocusBar({
   const sections = getSections(output);
 
   return (
-    <div className="sticky top-16 z-10 rounded-2xl border bg-background/95 p-3 shadow-sm backdrop-blur-xl">
+    <div
+      id={id}
+      className="static rounded-2xl border bg-card p-3 shadow-sm"
+    >
       <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
         <div className="min-w-0">
           <div className="mb-2 flex flex-wrap items-center gap-1.5">
@@ -104,6 +113,14 @@ function getFocus(output: TypedOutput) {
     };
   }
 
+  if (output.kind === "region") {
+    const data = output.data as RegionAnalysisOutput;
+    return {
+      headline: data.regionSummary?.oneLiner || data.regionSummary?.name || "Региональный анализ",
+      nextAction: data.nextSteps?.[0]?.action,
+    };
+  }
+
   const data = output.data as StructuredOutput;
   return {
     headline: data.decision,
@@ -129,7 +146,18 @@ function getSections(output: TypedOutput) {
       { href: "#evidence", label: "Факты", icon: CheckCircle2 },
       { href: "#economics", label: "Экономика", icon: BarChart3, primary: true },
       { href: "#risks", label: "Риски", icon: ShieldCheck },
-      { href: "#next-steps", label: "Следующий шаг", icon: ArrowRight, primary: true },
+      { href: "#sources", label: "Источники", icon: Flag },
+    ];
+  }
+
+  if (output.kind === "region") {
+    return [
+      { href: "#industries", label: "Отрасли", icon: Compass, primary: true },
+      { href: "#budget", label: "Бюджет", icon: BarChart3, primary: true },
+      { href: "#priorities", label: "Приоритеты", icon: Target, primary: true },
+      { href: "#scenarios", label: "Сценарии", icon: Route, primary: true },
+      { href: "#competition", label: "Альтернативы", icon: Building2, primary: true },
+      { href: "#data-gaps", label: "Проверка", icon: ShieldCheck },
       { href: "#sources", label: "Источники", icon: Flag },
     ];
   }
@@ -140,7 +168,7 @@ function getSections(output: TypedOutput) {
     { href: "#bets", label: "Ставки", icon: BadgeCheck },
     { href: "#plan", label: "План", icon: ClipboardList },
     { href: "#risks", label: "Риски", icon: ShieldCheck },
-    { href: "#next-steps", label: "Следующие шаги", icon: ArrowRight, primary: true },
+
     { href: "#sources", label: "Источники", icon: Flag },
   ];
 }

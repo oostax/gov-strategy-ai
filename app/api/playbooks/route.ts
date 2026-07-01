@@ -7,7 +7,7 @@ export async function GET() {
   try {
     const playbooks = await getStorage().listPlaybooks();
     return NextResponse.json({ playbooks });
-  } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+  } catch {
+    return NextResponse.json({ error: "Failed to list playbooks" }, { status: 500 });
   }
 }

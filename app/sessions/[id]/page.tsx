@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { Loader2, RefreshCw, Sparkles } from "lucide-react";
 import { toast } from "sonner";
@@ -8,8 +8,11 @@ import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
 import { SessionToolbar } from "@/components/strategy/session-toolbar";
 import { SessionFocusBar } from "@/components/strategy/session-focus-bar";
+import { GenerationFocusControls } from "@/components/strategy/generation-focus-controls";
 import { StructuredDashboard } from "@/components/strategy/structured/structured-dashboard";
+import { ErrorBoundary } from "@/components/strategy/structured/error-boundary";
 import { GenerationProgress } from "@/components/strategy/structured/generation-progress";
+import { BlocksGenerationProgress } from "@/components/strategy/structured/blocks-generation-progress";
 import { ActionBar } from "@/components/strategy/structured/action-bar";
 import { FeedbackWidget } from "@/components/strategy/structured/feedback-widget";
 import type { TypedOutput } from "@/lib/schemas/structured-output";
@@ -24,18 +27,22 @@ export default function SessionPage() {
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [feedbackReminderShown, setFeedbackReminderShown] = useState(false);
+  const [useBlocks, setUseBlocks] = useState(false);
+  const [blocksActive, setBlocksActive] = useState(false);
+  const [blockRunId, setBlockRunId] = useState<string | null>(null);
 
   useEffect(() => {
-    // Load session data and check for cached output
     fetch(`/api/sessions/${sessionId}`)
       .then((r) => r.json())
       .then((data: { session?: SessionProfile; structuredOutput?: TypedOutput }) => {
-        if (data.session) setSession(data.session);
-        // Try server-side cached output first
+        if (data.session) {
+          setSession(data.session);
+          const isRegion = data.session.taskType === "region_strategy" || data.session.taskType === "sber_region_strategy";
+          setUseBlocks(isRegion);
+        }
         if (data.structuredOutput) {
           setOutput(data.structuredOutput);
         } else {
-          // Fallback to localStorage
           try {
             const raw = localStorage.getItem(`sout-${sessionId}`);
             if (raw) setOutput(JSON.parse(raw) as TypedOutput);
@@ -45,7 +52,6 @@ export default function SessionPage() {
       .finally(() => setInitialLoading(false));
   }, [sessionId]);
 
-  // Auto-generate ONLY if no cached output and no output loaded
   useEffect(() => {
     if (!initialLoading && session && !output && !loading) {
       generate();
@@ -56,7 +62,7 @@ export default function SessionPage() {
   useEffect(() => {
     if (!output || loading || feedbackReminderShown) return;
     const timer = window.setTimeout(() => {
-      toast("Оцените результат — система обновит правила и память на основе вашей оценки");
+      toast("Оцените результат - система обновит правила и память на основе вашей оценки");
       setFeedbackReminderShown(true);
     }, 12000);
     return () => window.clearTimeout(timer);
@@ -66,10 +72,31 @@ export default function SessionPage() {
     if (!output || loading || !window.location.hash) return;
     const id = window.location.hash.slice(1);
     const timer = window.setTimeout(() => {
-      document.getElementById(id)?.scrollIntoView({ block: "start" });
+      const el = document.getElementById(id);
+      if (el) {
+        const header = document.getElementById("session-focus-bar");
+        const headerHeight = header ? header.offsetHeight + 16 : 96;
+        const y = el.getBoundingClientRect().top + window.scrollY - headerHeight;
+        window.scrollTo({ top: y, behavior: "smooth" });
+      }
     }, 100);
     return () => window.clearTimeout(timer);
   }, [loading, output]);
+
+  const handleBlocksComplete = useCallback((result: TypedOutput) => {
+    setOutput(result);
+    setBlocksActive(false);
+    setBlockRunId(null);
+    setLoading(false);
+    toast.success("Региональный анализ сформирован");
+  }, []);
+
+  const handleBlocksError = useCallback((error: string) => {
+    setBlocksActive(false);
+    setBlockRunId(null);
+    setLoading(false);
+    toast.error(error);
+  }, []);
 
   async function generate(prompt = "") {
     setOutput(null);
@@ -77,8 +104,32 @@ export default function SessionPage() {
       localStorage.removeItem(`sout-${sessionId}`);
     } catch {}
     setLoading(true);
+
+    if (useBlocks) {
+      setBlocksActive(true);
+      setBlockRunId(null);
+      try {
+        const res = await fetch("/api/generate/blocks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId, prompt }),
+        });
+        if (!res.ok) {
+          throw new Error("Не удалось запустить генерацию");
+        }
+        const data = (await res.json().catch(() => ({}))) as { runId?: string };
+        if (data.runId) setBlockRunId(data.runId);
+        toast("Запущена поблочная генерация");
+        return;
+      } catch (error) {
+        setBlocksActive(false);
+        setLoading(false);
+        toast.error(error instanceof Error ? error.message : "Ошибка запуска генерации");
+        return;
+      }
+    }
+
     try {
-      // Используем SSE-подобный подход: запускаем генерацию и поллим результат
       const startResponse = await fetch("/api/generate/structured", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -86,7 +137,7 @@ export default function SessionPage() {
       });
 
       if (!startResponse.ok) {
-        const err = await startResponse.json().catch(() => ({})) as { error?: string };
+        const err = (await startResponse.json().catch(() => ({}))) as { error?: string };
         throw new Error(err.error || `Ошибка: ${startResponse.status}`);
       }
 
@@ -100,7 +151,6 @@ export default function SessionPage() {
         setOutput(data.output);
         toast.success("Материал сформирован");
       } else if (data.status === "generating") {
-        // Поллим результат каждые 5 секунд
         toast("Генерация запущена, ожидание результата...");
         await pollForResult();
       } else {
@@ -108,7 +158,6 @@ export default function SessionPage() {
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Ошибка генерации";
-      // Если таймаут — пробуем поллить результат
       if (msg.includes("aborted") || msg.includes("timeout") || msg.includes("pattern")) {
         toast("Генерация выполняется, проверка результата...");
         await pollForResult();
@@ -121,7 +170,6 @@ export default function SessionPage() {
   }
 
   async function pollForResult() {
-    // Поллим /api/sessions/{id} каждые 5 секунд до 3 минут (первая проверка сразу)
     for (let i = 0; i < 36; i++) {
       if (i > 0) await new Promise((r) => setTimeout(r, 5000));
       try {
@@ -158,53 +206,63 @@ export default function SessionPage() {
     <AppShell>
       <div className="space-y-4">
         {session && (
-          <SessionToolbar session={session} onRenamed={(s) => setSession(s)} />
+          <>
+            <div className="static">
+              <SessionToolbar session={session} onRenamed={(s) => setSession(s)} />
+            </div>
+
+            {output && !loading && (
+              <SessionFocusBar id="session-focus-bar" session={session} output={output} />
+            )}
+          </>
         )}
 
-        {/* Progress bar during generation */}
-        <GenerationProgress active={loading} />
+        {blocksActive ? (
+          <BlocksGenerationProgress
+            sessionId={sessionId}
+            runId={blockRunId ?? undefined}
+            onComplete={handleBlocksComplete}
+            onError={handleBlocksError}
+          />
+        ) : (
+          <GenerationProgress active={loading} />
+        )}
 
-        {/* Regenerate button (shown when output exists) */}
         {output && !loading && (
           <div className="flex items-center justify-between gap-3 rounded-2xl border bg-card px-4 py-3">
-            <p className="text-sm text-muted-foreground">
-              Генерация Gigachat-3 10B
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => generate()}
-              disabled={loading}
-            >
+            <p className="text-sm text-muted-foreground">Анализ собран блоками: поиск, факты, сценарии, проверка источников</p>
+            <Button variant="outline" size="sm" onClick={() => generate()} disabled={loading}>
               <RefreshCw className="size-3.5" /> Сформировать заново
             </Button>
           </div>
         )}
 
-        {session && output && !loading && <SessionFocusBar session={session} output={output} />}
+        {session && (
+          <GenerationFocusControls session={session} loading={loading} onGenerate={generate} />
+        )}
 
-        {/* Main output — скрываем на время пересборки */}
-        {output && !loading && <StructuredDashboard output={output} />}
+        {output && !loading && (
+          <ErrorBoundary>
+            <StructuredDashboard output={output} />
+          </ErrorBoundary>
+        )}
 
-        {/* Action bar + Feedback (shown after output) */}
         {output && !loading && (
           <div className="space-y-4">
             <ActionBar sessionId={sessionId} />
-            <FeedbackWidget
-              sessionId={sessionId}
-              onEvolved={() => generate()}
-            />
+            <FeedbackWidget sessionId={sessionId} onEvolved={() => generate()} />
           </div>
         )}
 
-        {/* Empty state (only if no output and not loading) */}
         {!output && !loading && (
           <div className="flex min-h-80 items-center justify-center rounded-2xl border border-dashed">
             <div className="text-center">
               <Sparkles className="mx-auto mb-3 size-8 text-muted-foreground" />
               <p className="text-sm font-semibold">Формирование материала...</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Если генерация не началась автоматически:
+                {useBlocks
+                  ? "Региональный анализ собирается блоками: бюджет, отрасли, приоритеты, сценарии, руководители, поставщики"
+                  : "Если генерация не началась автоматически:"}
               </p>
               <Button className="mt-3" onClick={() => generate()}>
                 <Sparkles className="size-4" /> Сформировать

@@ -1,10 +1,16 @@
 import { NextResponse } from "next/server";
+import { promises as fs } from "fs";
 import { buildDocx } from "@/lib/export/docx";
 import { buildPptx } from "@/lib/export/pptx";
+import { buildRegionPdf, toRegionAgentOutput } from "@/lib/export/region-export";
 import { roleLabels, taskLabels } from "@/lib/schemas/session";
+import type { TypedOutput } from "@/lib/schemas/structured-output";
+import { structuredOutputPath } from "@/lib/agents/region-blocks/storage";
 import { getStorage } from "@/lib/storage/local-json-storage";
 
 export const runtime = "nodejs";
+
+const SAFE_ID = /^[a-zA-Z0-9_-]+$/;
 
 function transliterate(text: string): string {
   const map: Record<string, string> = {
@@ -28,33 +34,60 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const sessionId = url.searchParams.get("sessionId");
     const format = (url.searchParams.get("format") || "docx").toLowerCase();
-    if (!sessionId) {
-      return NextResponse.json({ error: "sessionId обязателен" }, { status: 400 });
+    if (!sessionId || !SAFE_ID.test(sessionId)) {
+      return NextResponse.json({ error: "Invalid sessionId" }, { status: 400 });
     }
     const details = await getStorage().getSession(sessionId);
     if (!details) {
-      return NextResponse.json({ error: "Сессия не найдена" }, { status: 404 });
+      return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
     const latest = details.outputs[0];
-    if (!latest) {
+    let structured: TypedOutput | null = null;
+    try {
+      structured = JSON.parse(await fs.readFile(structuredOutputPath(sessionId), "utf8")) as TypedOutput;
+    } catch {}
+
+    if (!latest && !structured) {
       return NextResponse.json(
-        { error: "В сессии ещё нет материалов для экспорта" },
+        { error: "No materials to export" },
         { status: 400 },
       );
     }
     const meta = [
       roleLabels[details.session.userRole],
       taskLabels[details.session.taskType],
-      details.session.region ? `Регион: ${details.session.region}` : "",
-      details.session.audience ? `Для: ${details.session.audience}` : "",
+      details.session.region ? `Region: ${details.session.region}` : "",
+      details.session.audience ? `For: ${details.session.audience}` : "",
     ].filter(Boolean);
 
     const baseName = transliterate(
-      details.session.title?.trim() || latest.title || "strategy",
+      details.session.title?.trim() || latest?.title || "strategy",
     ) || "strategy";
 
+    const regionOutput = structured ? toRegionAgentOutput(structured, sessionId) : null;
+
+    if (format === "pdf" && structured) {
+      const bytes = await buildRegionPdf(structured, meta);
+      if (bytes) {
+        return new NextResponse(Buffer.from(bytes), {
+          status: 200,
+          headers: {
+            "Content-Type": "application/pdf",
+            "Content-Disposition": `attachment; filename="${baseName}.pdf"`,
+            "Cache-Control": "no-store",
+          },
+        });
+      }
+    }
+    if (format === "pdf") {
+      return NextResponse.json(
+        { error: "PDF export is available for structured region sessions" },
+        { status: 400 },
+      );
+    }
+
     if (format === "pptx") {
-      const bytes = buildPptx(latest, meta);
+      const bytes = buildPptx(regionOutput || latest!, meta);
       return new NextResponse(Buffer.from(bytes), {
         status: 200,
         headers: {
@@ -66,7 +99,7 @@ export async function GET(request: Request) {
       });
     }
 
-    const bytes = buildDocx(latest, meta);
+    const bytes = buildDocx(regionOutput || latest!, meta);
     return new NextResponse(Buffer.from(bytes), {
       status: 200,
       headers: {
@@ -77,9 +110,7 @@ export async function GET(request: Request) {
       },
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Export failed" },
-      { status: 500 },
-    );
+    console.error("[export]", error);
+    return NextResponse.json({ error: "Export failed" }, { status: 500 });
   }
 }

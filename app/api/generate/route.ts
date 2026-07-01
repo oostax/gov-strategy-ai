@@ -4,7 +4,7 @@ import { generateStrategyOutput } from "@/lib/agents/orchestrator";
 import { getStorage } from "@/lib/storage/local-json-storage";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+export const maxDuration = 180;
 
 export async function POST(request: Request) {
   try {
@@ -14,6 +14,7 @@ export async function POST(request: Request) {
     const result = await generateStrategyOutput(details.session, input.prompt);
     return NextResponse.json(result);
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Generation failed" }, { status: 400 });
+    console.error("[generate]", error);
+    return NextResponse.json({ error: "Generation failed" }, { status: 500 });
   }
 }

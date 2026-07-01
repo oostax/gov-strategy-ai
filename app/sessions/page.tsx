@@ -8,6 +8,8 @@ import { getStorage } from "@/lib/storage/local-json-storage";
 import { EmptySessionsTrigger } from "@/components/session/new-session-trigger";
 import { SessionRegistry } from "@/components/session/session-registry";
 
+export const dynamic = "force-dynamic";
+
 export default async function SessionsPage() {
   const sessions = await getStorage().listSessions();
   return (

@@ -18,7 +18,6 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -47,16 +46,12 @@ const newId = () => `tmp_${Math.random().toString(36).slice(2, 10)}`;
 type ContextKey =
   | "federalDistrict"
   | "population"
-  | "digitalMaturity"
-  | "digitalMaturityNote"
   | "budgetProfile"
   | "budgetCycle";
 
 const CONTEXT_FIELDS: { key: ContextKey; label: string }[] = [
   { key: "federalDistrict", label: "Федеральный округ" },
   { key: "population", label: "Население" },
-  { key: "digitalMaturity", label: "Цифровая зрелость" },
-  { key: "digitalMaturityNote", label: "Комментарий к зрелости" },
   { key: "budgetProfile", label: "Бюджетный профиль" },
   { key: "budgetCycle", label: "Бюджетный цикл" },
 ];
@@ -319,9 +314,6 @@ export function RegionEditor({ initial }: { initial: RegionProfile }) {
             <ArrowLeft className="size-4" />
           </Link>
           <h1 className="text-base font-semibold">{draft.name}</h1>
-          {draft.digitalMaturity && (
-            <Badge variant="secondary" className="text-[10px]">{draft.digitalMaturity}/5</Badge>
-          )}
         </div>
         <div className="flex gap-2">
           <Button variant="destructive" size="sm" onClick={handleDelete} disabled={saving}>
@@ -466,27 +458,6 @@ export function RegionEditor({ initial }: { initial: RegionProfile }) {
                 <Input
                   value={draft.population ?? ""}
                   onChange={(e) => patch("population", e.target.value)}
-                />
-              </Field>
-              <Field label="Цифровая зрелость (1–5)">
-                <Input
-                  type="number"
-                  min={1}
-                  max={5}
-                  value={draft.digitalMaturity ?? ""}
-                  onChange={(e) =>
-                    patch(
-                      "digitalMaturity",
-                      e.target.value ? Math.min(5, Math.max(1, Number(e.target.value))) : undefined,
-                    )
-                  }
-                />
-              </Field>
-              <Field label="Комментарий к зрелости" full>
-                <Textarea
-                  rows={2}
-                  value={draft.digitalMaturityNote ?? ""}
-                  onChange={(e) => patch("digitalMaturityNote", e.target.value)}
                 />
               </Field>
               <Field label="Бюджетный профиль" full>

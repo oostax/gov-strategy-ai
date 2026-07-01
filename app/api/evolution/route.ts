@@ -23,7 +23,7 @@ export async function POST(request: Request) {
     const activePlaybooks = selectRelevantPlaybooks(details.session, playbooks);
     const status = getRuntimeStatus();
     if (!status.llm.connected) {
-      throw new Error("Cloud.ru Foundation Models не подключен. Ручной запуск evolution требует реальную LLM-модель.");
+      throw new Error("LLM not connected");
     }
     const a2aReady =
       status.ouroboros.mode === "a2a" &&
@@ -34,6 +34,7 @@ export async function POST(request: Request) {
     const evolution = a2aReady ? await callOuroborosEvolution(evolutionInput) : await callCloudEvolution(evolutionInput);
     return NextResponse.json({ evolution });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Evolution failed" }, { status: 400 });
+    console.error("[evolution]", error);
+    return NextResponse.json({ error: "Evolution failed" }, { status: 500 });
   }
 }

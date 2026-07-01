@@ -190,7 +190,7 @@ export const relationshipLabels: Record<"cold" | "warm" | "hot", string> = {
 /** Короткое резюме региона одной строкой — для UI */
 export function getRegionSummary(region: RegionProfile): string {
   const parts: string[] = [];
-  if (region.digitalMaturity) parts.push(`Цифровая зрелость ${region.digitalMaturity}/5`);
+  if (region.budgetProfile) parts.push(region.budgetProfile);
   if (region.activeProjects.length) parts.push(`${region.activeProjects.length} активных проект(а/ов) Сбера`);
   if (region.stakeholders.length) parts.push(`${region.stakeholders.length} ЛПР в карточке`);
   return parts.join(" · ");

@@ -4,13 +4,11 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
-  GripVertical,
   History,
   Loader2,
   Plus,
   Save,
   Sparkles,
-  Trash2,
   X,
 } from "lucide-react";
 import { toast } from "sonner";

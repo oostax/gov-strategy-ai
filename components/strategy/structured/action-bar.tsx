@@ -4,11 +4,10 @@ import { useState } from "react";
 import {
   Check,
   Copy,
-  Download,
   FileText,
-  Link as LinkIcon,
   Presentation,
   Share2,
+  FileDown,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -21,7 +20,7 @@ export function ActionBar({ sessionId }: { sessionId: string }) {
   const [showShare, setShowShare] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  function exportAs(format: "docx" | "pptx") {
+  function exportAs(format: "docx" | "pptx" | "pdf") {
     window.open(`/api/export?sessionId=${sessionId}&format=${format}`, "_blank");
   }
 
@@ -69,6 +68,9 @@ export function ActionBar({ sessionId }: { sessionId: string }) {
         </Button>
         <Button variant="outline" size="sm" onClick={() => exportAs("pptx")}>
           <Presentation className="size-3.5" /> Презентация
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => exportAs("pdf")}>
+          <FileDown className="size-3.5" /> PDF
         </Button>
         <div className="relative">
           <Button

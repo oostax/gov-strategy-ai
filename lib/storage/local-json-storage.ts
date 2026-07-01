@@ -1,6 +1,6 @@
 import { promises as fs } from "fs";
 import path from "path";
-import { createId } from "@/lib/utils/ids";
+import { createId, createToken } from "@/lib/utils/ids";
 import { nowIso } from "@/lib/utils/dates";
 import type { Feedback } from "@/lib/schemas/feedback";
 import type { AgentOutput } from "@/lib/schemas/output";
@@ -20,7 +20,30 @@ import {
   type UpdateSberGovProjectInput,
 } from "./sber-projects";
 
-const dataRoot = path.join(process.cwd(), "data");
+const dataRoot = process.env.DATA_DIR || path.join(process.cwd(), "data");
+
+// ── Mutex for concurrent access safety ──────────────────────────────────────
+let storeLock = false;
+const lockQueue: Array<() => void> = [];
+
+async function acquireLock(): Promise<void> {
+  if (!storeLock) {
+    storeLock = true;
+    return;
+  }
+  return new Promise<void>((resolve) => {
+    lockQueue.push(resolve);
+  });
+}
+
+function releaseLock(): void {
+  if (lockQueue.length > 0) {
+    const next = lockQueue.shift()!;
+    next();
+  } else {
+    storeLock = false;
+  }
+}
 
 interface StoreShape {
   sessions: SessionProfile[];
@@ -71,14 +94,17 @@ const playbookSeed: Array<Omit<Playbook, "updatedAt" | "history">> = [
     slug: "sales_region_mode",
     description: "Региональные заходы, ЛПР, ценность для субъекта и продажи.",
     rules: [
-      "Показывай карту ЛПР: Минфин, Минцифры, отраслевой заказчик — мотивы каждого.",
-      "Формулируй первый заход без перегруза технологическими деталями.",
+      "Стиль регионального анализа: серьёзный русский деловой язык; профессиональные сокращения ЛПР, ИТ, ВРП, ФО, млрд и млн допустимы.",
+      "Не используй в материале разговорные слова, англицизмы, внутренние рабочие термины и заглушки вроде unknown, n/a, 'уточняется'.",
+      "Не используй слова 'боль', 'мотив', 'заход', 'пробел'; заменяй на 'ограничение', 'управленческий интерес', 'практическое действие', 'что проверить'.",
+      "Показывай карту ЛПР: Минфин, Минцифры, отраслевой заказчик — управленческий интерес каждого.",
+      "Формулируй первое практическое действие без перегруза технологическими деталями.",
       "Указывай, где Сбер может дать быстрый эффект за 8 недель.",
-      "Для каждого ЛПР: что он хочет, что боится, какой артефакт ему нужен.",
-      "Первый заход: конкретная встреча, конкретный вопрос, конкретный следующий шаг.",
+      "Для каждого ЛПР: управленческий интерес, ограничение, нужный артефакт.",
+      "Первое действие: конкретная встреча, конкретный вопрос, конкретный следующий шаг.",
       "Не обещай результаты без baseline — формулируй как гипотезу для проверки.",
     ],
-    template: "Региональная гипотеза → Стейкхолдеры → Первый заход → MVP → Возражения",
+    template: "Региональная гипотеза → ЛПР → Первое действие → MVP → Возражения",
     version: 1,
   },
   {
@@ -250,52 +276,56 @@ async function seedMemoryFiles() {
 }
 
 async function loadStore(): Promise<StoreShape> {
-  await ensureDir(dataRoot);
-  const now = nowIso();
-  const seededPlaybooks = playbookSeed.map((playbook) => ({
-    ...playbook,
-    updatedAt: now,
-    history: [{ version: 1, change: "Initial MVP playbook seed", createdAt: now }],
-  }));
-  const store = await readJson<StoreShape>(path.join(dataRoot, "store.json"), {
-    sessions: [],
-    outputs: [],
-    feedback: [],
-    evolution: [],
-    playbooks: seededPlaybooks,
-    regions: [],
-    sberCatalog: [],
-  });
-  if (store.playbooks.length === 0) store.playbooks = seededPlaybooks;
-  if (!Array.isArray(store.regions)) store.regions = [];
-  if (store.regions.length === 0) {
-    store.regions = regionSeed.map((region) => ({
-      ...region,
-      createdAt: now,
+  await acquireLock();
+  try {
+    await ensureDir(dataRoot);
+    const now = nowIso();
+    const seededPlaybooks = playbookSeed.map((playbook) => ({
+      ...playbook,
       updatedAt: now,
+      history: [{ version: 1, change: "Initial MVP playbook seed", createdAt: now }],
     }));
+    const store = await readJson<StoreShape>(path.join(dataRoot, "store.json"), {
+      sessions: [],
+      outputs: [],
+      feedback: [],
+      evolution: [],
+      playbooks: seededPlaybooks,
+      regions: [],
+      sberCatalog: [],
+    });
+    if (store.playbooks.length === 0) store.playbooks = seededPlaybooks;
+    if (!Array.isArray(store.regions)) store.regions = [];
+    if (store.regions.length === 0) {
+      store.regions = regionSeed.map((region) => ({
+        ...region,
+        createdAt: now,
+        updatedAt: now,
+      }));
+    }
+    if (!Array.isArray(store.sberCatalog)) store.sberCatalog = [];
+    if (store.sberCatalog.length === 0) {
+      store.sberCatalog = sberGovProjects.map((project) => ({ ...project }));
+    }
+    const seedBySlug = new Map(seededPlaybooks.map((playbook) => [playbook.slug, playbook]));
+    store.playbooks = store.playbooks.map((playbook) => {
+      const seed = seedBySlug.get(playbook.slug);
+      return seed
+        ? {
+            ...playbook,
+            name: seed.name,
+            description: seed.description,
+            template: playbook.template.includes("->") ? seed.template : playbook.template,
+          }
+        : playbook;
+    });
+    await seedPlaybookMarkdown(store.playbooks);
+    await seedMemoryFiles();
+    await writeJson(path.join(dataRoot, "store.json"), store);
+    return store;
+  } finally {
+    releaseLock();
   }
-  // Каталог проектов Сбера: при первом запуске сидируем из константы, дальше — редактируемый.
-  if (!Array.isArray(store.sberCatalog)) store.sberCatalog = [];
-  if (store.sberCatalog.length === 0) {
-    store.sberCatalog = sberGovProjects.map((project) => ({ ...project }));
-  }
-  const seedBySlug = new Map(seededPlaybooks.map((playbook) => [playbook.slug, playbook]));
-  store.playbooks = store.playbooks.map((playbook) => {
-    const seed = seedBySlug.get(playbook.slug);
-    return seed
-      ? {
-          ...playbook,
-          name: seed.name,
-          description: seed.description,
-          template: playbook.template.includes("->") ? seed.template : playbook.template,
-        }
-      : playbook;
-  });
-  await seedPlaybookMarkdown(store.playbooks);
-  await seedMemoryFiles();
-  await writeJson(path.join(dataRoot, "store.json"), store);
-  return store;
 }
 
 async function saveStore(store: StoreShape) {
@@ -353,9 +383,7 @@ export function createLocalJsonStorage(): StorageAdapter {
       const store = await loadStore();
       const existing = store.sessions.find((item) => item.id === id);
       if (!existing) throw new Error("Session not found");
-      const nextToken = enable
-        ? createId("shr").replace(/^shr_/, "")
-        : undefined;
+      const nextToken = enable ? createToken(24) : undefined;
       const next: SessionProfile = {
         ...existing,
         shareToken: nextToken,

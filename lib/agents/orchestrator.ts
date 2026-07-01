@@ -37,7 +37,12 @@ export async function generateStrategyOutput(
   await onStep?.("playbooks", "Подбираю релевантные правила");
   const playbooks = await storage.listPlaybooks();
   const activePlaybooks = selectRelevantPlaybooks(session, playbooks);
-  await onStep?.("region_context", "Читаю стратегию региона и портфель Сбера");
+  await onStep?.(
+    "region_context",
+    session.taskType === "sber_region_strategy"
+      ? "Читаю стратегию региона и портфель Сбера"
+      : "Читаю региональный контекст",
+  );
   const region = await resolveRegionForSession(session);
   await onStep?.("memory_search", "Ищу релевантную память в MemPalace");
   const memories = await getMemoryClient().search(`${session.focusTopic ?? ""} ${session.region ?? ""} ${prompt}`);
@@ -48,9 +53,9 @@ export async function generateStrategyOutput(
   });
   const context = [
     sessionContext(session, prompt),
-    formatRegionContext(region),
+    formatRegionContext(region, { includeSberPortfolio: session.taskType === "sber_region_strategy" }),
     `Активные правила:\n${activePlaybooks.map((item) => `## ${item.name}\n${item.rules.slice(0, 2).map((rule) => `- ${rule}`).join("\n")}`).join("\n\n")}`,
-    `Память MemPalace:\n${memories.slice(0, 3).map((item) => `- ${item.title}: ${item.excerpt.slice(0, 280)}`).join("\n") || "релевантных записей не найдено"}`,
+    `Память MemPalace:\n${memories.slice(0, 3).map((item) => `- ${item.title}: ${item.excerpt.slice(0, 280)}`).join("\n") || "релевантные записи отсутствуют"}`,
     `Открытые источники:\n${formatEvidenceForPrompt(webEvidence)}`,
   ].join("\n\n");
 
@@ -217,10 +222,10 @@ const SECTION_CONFIGS: Record<TaskType, SectionConfig[]> = {
     { title: "Риски и конкуренция", type: "risks", blockKey: "risksSber" },
   ],
   region_strategy: [
-    { title: "Региональный контекст и ставка", type: "actions", blockKey: "directions" },
-    { title: "Первый заход и MVP", type: "roadmap", blockKey: "mvp" },
-    { title: "ЛПР, стейкхолдеры и мотивы", type: "metrics", blockKey: "metrics" },
-    { title: "Риски и роль Сбера в регионе", type: "risks", blockKey: "risksSber" },
+    { title: "Бюджет и отраслевой контекст", type: "actions", blockKey: "directions" },
+    { title: "Приоритеты региона на 5 лет", type: "roadmap", blockKey: "mvp" },
+    { title: "Руководители, ведомства и поставщики", type: "metrics", blockKey: "metrics" },
+    { title: "Сценарии развития региона", type: "risks", blockKey: "risksSber" },
   ],
   scenario_analysis: [
     { title: "Три сценария", type: "actions", blockKey: "directions" },
@@ -413,11 +418,11 @@ function buildBlockPrompts(session: SessionProfile): {
 
     case "region_strategy":
       return {
-        summaryPrompt: `Напиши резюме региональной стратегии ${regionCtx}: ставка Сбера, почему этот регион сейчас, конкретный первый шаг. До 600 знаков. Используй факты из открытых источников по региону.`,
-        directionsPrompt: `Напиши региональный анализ: 1) контекст региона (факты из источников), 2) ставка Сбера — что конкретно предлагаем, 3) карта ЛПР — Минцифры, Минфин, отраслевой заказчик — мотив каждого, 4) первый заход — что говорим на первой встрече.`,
-        mvpPrompt: `Напиши план первого захода: 1) кому звоним/пишем первым и что говорим, 2) что оставляем после первой встречи (артефакт), 3) MVP на 8 недель — что делаем в регионе.`,
-        metricsPrompt: `Напиши метрики регионального проекта: как измерим успех, источники данных по региону, что нужно снять как baseline до старта.`,
-        risksSberPrompt: `Напиши: 1) региональные риски (политические, бюджетные, технические), 2) роль Сбера — конкретный продукт для этого региона, команда, артефакт, 3) что нужно проверить по региону.`,
+        summaryPrompt: `Напиши резюме анализа региона ${regionCtx}: 1) чем регион управленчески важен, 2) что подтверждено источниками по бюджету и отраслям, 3) какой главный вывод на 5-летнем горизонте. До 600 знаков. Без продажной логики.`,
+        directionsPrompt: `Напиши региональный анализ: 1) экономический профиль региона, 2) отраслевая структура и крупные организации только при наличии источника, 3) бюджетный контур, 4) стратегические приоритеты на 5 лет, 5) что проверить дополнительно.`,
+        mvpPrompt: `Напиши сценарии развития региона на 5 лет: базовый, ускоренный, стрессовый и отраслевой/инфраструктурный. Для каждого: триггер, действия региона, бюджетные последствия, эффект для отраслей, ранние признаки.`,
+        metricsPrompt: `Напиши карту проверяемых показателей региона: показатель, источник, периодичность, зачем нужен для анализа. Без выдуманных чисел.`,
+        risksSberPrompt: `Напиши региональные риски и ограничения: бюджетные, отраслевые, кадровые, инфраструктурные, регуляторные. Для каждого: факт или гипотеза, источник/где проверить, управленческое последствие.`,
       };
 
     case "strategic_bets":

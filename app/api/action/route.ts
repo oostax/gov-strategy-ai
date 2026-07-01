@@ -11,6 +11,7 @@ export async function POST(request: Request) {
     const result = await runInteractiveAction(input);
     return NextResponse.json(result);
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Action failed" }, { status: 400 });
+    console.error("[action]", error);
+    return NextResponse.json({ error: "Action failed" }, { status: 500 });
   }
 }

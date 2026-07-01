@@ -238,9 +238,10 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ feedback, evolution });
   } catch (error) {
+    console.error("[feedback]", error);
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Feedback failed" },
-      { status: 400 },
+      { error: "Feedback processing failed" },
+      { status: 500 },
     );
   }
 }

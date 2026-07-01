@@ -7,11 +7,6 @@ import { buildRegionDraft } from "@/lib/agents/region-autofill";
 
 export const runtime = "nodejs";
 
-/**
- * Фоновое автозаполнение карточки нового региона. Сначала помечает черновик как
- * «generating» (чтобы редактор региона сразу показал спиннер), затем собирает
- * данные из открытых источников и сохраняет. Ошибки только логируются.
- */
 async function autofillRegionInBackground(regionId: string, regionName: string) {
   const storage = getStorage();
   try {
@@ -29,8 +24,7 @@ async function autofillRegionInBackground(regionId: string, regionName: string) 
     const draft = await buildRegionDraft(regionName);
     await storage.updateRegion(regionId, { draft });
   } catch (err) {
-    console.error(`[sessions] автозаполнение региона ${regionId} не удалось:`, err);
-    // Снимаем статус «generating», чтобы UI не висел в загрузке.
+    console.error(`[sessions] autofill region ${regionId} failed:`, err);
     await storage
       .updateRegion(regionId, {
         draft: {
@@ -51,8 +45,8 @@ export async function GET() {
   try {
     const sessions = await getStorage().listSessions();
     return NextResponse.json({ sessions });
-  } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Unknown error" }, { status: 500 });
+  } catch {
+    return NextResponse.json({ error: "Failed to list sessions" }, { status: 500 });
   }
 }
 
@@ -60,8 +54,6 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const input = createSessionSchema.parse(body);
-    // Привязываем сессию к региону справочника: находим существующий или
-    // создаём новый — иначе региональный контекст не подтягивается в генерацию.
     const { input: withRegion, createdRegionId } = await ensureRegionForSession(input);
     const session = await getStorage().createSession(withRegion);
     try {
@@ -71,14 +63,13 @@ export async function POST(request: Request) {
       throw error;
     }
 
-    // Для только что созданного региона запускаем автозаполнение карточки в фоне
-    // (fire-and-forget): создание сессии не ждёт веб-поиск и LLM.
     if (createdRegionId) {
       void autofillRegionInBackground(createdRegionId, withRegion.region ?? "");
     }
 
     return NextResponse.json({ session }, { status: 201 });
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid request" }, { status: 400 });
+    console.error("[sessions] create failed:", error);
+    return NextResponse.json({ error: "Failed to create session" }, { status: 500 });
   }
 }

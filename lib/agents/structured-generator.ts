@@ -15,11 +15,12 @@ import type {
   StructuredOutput,
   TypedOutput,
 } from "@/lib/schemas/structured-output";
-import { callLLM } from "./llm-client";
-import { formatRegionContext, modePrompt } from "./prompt-builder";
-import { getDocumentBlueprint } from "./document-blueprint";
-import { buildEvidencePack, formatEvidencePack } from "./evidence-pack";
+import { callLLM } from "@/lib/agents/llm-client";
+import { formatRegionContext, modePrompt } from "@/lib/agents/prompt-builder";
+import { getDocumentBlueprint } from "@/lib/agents/document-blueprint";
+import { buildEvidencePack, formatEvidencePack } from "@/lib/agents/evidence-pack";
 import { baseSystemPrompt } from "@/lib/prompts/base-system";
+import { guardRegionOutput } from "@/lib/agents/fact-guard";
 import {
   strategyJsonContract,
   meetingJsonContract,
@@ -28,6 +29,7 @@ import {
 } from "@/lib/prompts/structured-contract";
 import { roleLabels, taskLabels } from "@/lib/schemas/session";
 import { formatSberProjectsForPrompt, type SberGovProject } from "@/lib/storage/sber-projects";
+import { jsonrepair } from "jsonrepair";
 
 function getContract(taskType: string): string {
   if (taskType === "meeting_preparation" || taskType === "meeting_followup") {
@@ -56,22 +58,30 @@ function getKind(taskType: string): TypedOutput["kind"] {
 }
 
 function repairJsonText(raw: string): string {
-  return raw
+  const cleaned = raw
     .replace(/^```json\s*/i, "")
     .replace(/^```\s*/i, "")
     .replace(/```\s*$/i, "")
     .trim()
-    .replace(/,\s*([}\]])/g, "$1");
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "");
+  return cleaned.replace(/,\s*([}\]])/g, "$1");
 }
 
 function tryParseJson(raw: string): unknown {
   const cleaned = repairJsonText(raw);
+  const parseWithRepair = (candidate: string) => {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      return JSON.parse(jsonrepair(candidate));
+    }
+  };
   try {
-    return JSON.parse(cleaned);
+    return parseWithRepair(cleaned);
   } catch {
     const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error("Модель вернула невалидный JSON. Попробуйте пересобрать.");
-    return JSON.parse(repairJsonText(jsonMatch[0]));
+    return parseWithRepair(repairJsonText(jsonMatch[0]));
   }
 }
 
@@ -87,17 +97,27 @@ function normalizeUrl(url?: string) {
 
 function extractAllowedSources(webEvidence: string): AllowedSource[] {
   const sources: AllowedSource[] = [];
-  const pattern =
-    /(?:^|\n)\d+\.\s+(.+?)\nИсточник:\s+(.+?)\nURL:\s+(\S+)[\s\S]*?\nФрагмент:\s+([\s\S]*?)(?=\n\n\d+\.\s|\s*$)/g;
-  for (const match of webEvidence.matchAll(pattern)) {
-    const title = match[1].trim();
-    const url = match[3].trim();
-    const excerpt = match[4].replace(/\s+/g, " ").trim().slice(0, 420);
+  const blocks = webEvidence
+    .split(/\n\n(?=\d+\.\s+)/g)
+    .filter((block) => /^\d+\.\s+/.test(block.trim()));
+
+  for (const block of blocks) {
+    const title = block.match(/^\d+\.\s+(.+?)\s*$/m)?.[1]?.trim() ?? "";
+    const url = block.match(/^URL:\s*(\S+)/m)?.[1]?.trim() ?? "";
+    const fragment = block.match(/^Фрагмент:\s*([\s\S]*?)(?=\nПолный текст первоисточника|\n\n\d+\.\s|\s*$)/m)?.[1] ?? "";
+    const fullTextLead =
+      block.match(/^Полный текст первоисточника .*?:\s*([\s\S]*?)$/m)?.[1]?.slice(0, 900) ?? "";
+    const excerpt = [fragment, fullTextLead]
+      .filter(Boolean)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 1400);
     if (!title || !url || !excerpt) continue;
     if (sources.some((source) => normalizeUrl(source.url) === normalizeUrl(url))) continue;
     sources.push({ title, url, excerpt });
   }
-  return sources.slice(0, 8);
+  return sources.slice(0, 12);
 }
 
 function firstEvidenceSentence(excerpt: string) {
@@ -110,12 +130,175 @@ function firstEvidenceSentence(excerpt: string) {
 }
 
 function safeSources(_current: Source[] | undefined, allowed: AllowedSource[]): Source[] {
-  return allowed.slice(0, 5).map((source) => ({
+  return allowed.slice(0, 8).map((source) => ({
     title: source.title,
     url: source.url,
     excerpt: firstEvidenceSentence(source.excerpt),
     isVerified: true,
   }));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function structuredDataCandidate(value: unknown): unknown {
+  if (isRecord(value) && isRecord(value.data) && typeof value.kind === "string") {
+    return value.data;
+  }
+  return value;
+}
+
+function isUsableStructuredData(
+  kind: TypedOutput["kind"],
+  value: unknown,
+  options: { requireSources?: boolean } = {},
+): boolean {
+  const requireSources = options.requireSources ?? true;
+  value = structuredDataCandidate(value);
+  if (!isRecord(value)) return false;
+  if ("score" in value || "problems" in value) return false;
+
+  if (kind === "region") {
+    const regionSummary = value.regionSummary;
+    const budgetLandscape = value.budgetLandscape;
+    const strategicPriorities = value.strategicPriorities;
+    return (
+      isRecord(regionSummary) &&
+      typeof regionSummary.name === "string" &&
+      regionSummary.name.trim().length > 0 &&
+      isRecord(budgetLandscape) &&
+      Array.isArray(value.industryBreakdown) &&
+      value.industryBreakdown.length > 0 &&
+      Array.isArray(value.regionalScenarios) &&
+      value.regionalScenarios.length > 0 &&
+      Array.isArray(value.competitiveLandscape) &&
+      value.competitiveLandscape.length > 0 &&
+      Array.isArray(value.entryPoints) &&
+      value.entryPoints.length > 0 &&
+      isRecord(strategicPriorities) &&
+      Array.isArray(strategicPriorities.confirmed) &&
+      (!requireSources || (Array.isArray(value.sources) && value.sources.length > 0))
+    );
+  }
+
+  if (kind === "meeting") {
+    return typeof value.meetingGoal === "string" && Array.isArray(value.agenda) && value.agenda.length > 0;
+  }
+
+  if (kind === "brief") {
+    return typeof value.decision === "string" && Array.isArray(value.evidence) && isRecord(value.nextStep);
+  }
+
+  return (
+    typeof value.decision === "string" &&
+    Array.isArray(value.bets) &&
+    value.bets.length > 0 &&
+    Array.isArray(value.nextSteps)
+  );
+}
+
+function assertUsableStructuredData(
+  kind: TypedOutput["kind"],
+  value: unknown,
+  options: { requireSources?: boolean } = {},
+): asserts value is object {
+  if (!isUsableStructuredData(kind, value, options)) {
+    throw new Error(
+      `LLM returned JSON that does not match ${kind} contract: ${describeStructuredDataIssues(kind, value, options).join(", ")}`,
+    );
+  }
+}
+
+function describeStructuredDataIssues(
+  kind: TypedOutput["kind"],
+  value: unknown,
+  options: { requireSources?: boolean } = {},
+): string[] {
+  const requireSources = options.requireSources ?? true;
+  const data = structuredDataCandidate(value);
+  if (!isRecord(data)) return ["not an object"];
+  const issues: string[] = [];
+  if ("score" in data || "problems" in data) issues.push("review wrapper returned");
+  if (kind === "region") {
+    if (!isRecord(data.regionSummary) || typeof data.regionSummary.name !== "string") issues.push("regionSummary missing");
+    if (!Array.isArray(data.industryBreakdown) || data.industryBreakdown.length === 0) issues.push("industryBreakdown empty");
+    if (!Array.isArray(data.regionalScenarios) || data.regionalScenarios.length === 0) issues.push("regionalScenarios empty");
+    if (!Array.isArray(data.competitiveLandscape) || data.competitiveLandscape.length === 0) issues.push("competitiveLandscape empty");
+    if (!Array.isArray(data.entryPoints) || data.entryPoints.length === 0) issues.push("entryPoints empty");
+    if (!isRecord(data.strategicPriorities) || !Array.isArray(data.strategicPriorities.confirmed)) issues.push("strategicPriorities missing");
+    if (requireSources && (!Array.isArray(data.sources) || data.sources.length === 0)) issues.push("sources empty");
+  }
+  return issues.length ? issues : ["unknown shape mismatch"];
+}
+
+async function repairStructuredShape({
+  candidate,
+  contract,
+  kind,
+  session,
+  webEvidence,
+  evidencePack,
+  blueprint,
+}: {
+  candidate: unknown;
+  contract: string;
+  kind: TypedOutput["kind"];
+  session: SessionProfile;
+  webEvidence: string;
+  evidencePack: string;
+  blueprint: string;
+}): Promise<unknown> {
+  if (isUsableStructuredData(kind, candidate, { requireSources: false })) return structuredDataCandidate(candidate);
+
+  const raw = await callLLM({
+    messages: [
+      {
+        role: "system",
+        content: [
+          "Ты исправляешь НЕ стиль, а форму structured JSON для интерфейса.",
+          "Верни только финальный JSON документа по схеме. Не возвращай review, score, problems, comments или markdown.",
+          "Запрещено оставлять обязательные массивы пустыми.",
+          "Если регионального источника не хватает, формулируй пункт как рабочую гипотезу с nextCheck/dataGaps, но не как факт.",
+          "Не используй заглушки и фразы вида 'материал требует повторной сборки'. Пользователь должен получить содержательный управленческий документ.",
+          contract,
+        ].join("\n\n"),
+      },
+      {
+        role: "user",
+        content: [
+          `Тип документа: ${kind}`,
+          `Регион: ${session.region || "федеральный уровень"}`,
+          `Задача: ${session.focusTopic || "не указана"}`,
+          "",
+          `Blueprint:\n${blueprint}`,
+          "",
+          `Evidence pack:\n${evidencePack}`,
+          "",
+          `Сырые источники:\n${webEvidence}`,
+          "",
+          "Требования к полноте для region:",
+          "- regionSummary обязателен.",
+          "- industryBreakdown: 3-5 элементов.",
+          "- regionalScenarios: 3-4 элемента.",
+          "- competitiveLandscape: 4-6 элементов; если нет регионального подтверждения, пометь как отраслевая гипотеза и добавь nextCheck.",
+          "- entryPoints: 2-4 элемента.",
+          "- risks: 2-3 элемента.",
+          "- nextSteps: 3-4 элемента.",
+          "- sources: только из списка выше.",
+          "",
+          `Частичный/неполный JSON, который нужно исправить:\n${JSON.stringify(candidate).slice(0, 18000)}`,
+        ].join("\n"),
+      },
+    ],
+    maxTokens: 8000,
+    temperature: 0.08,
+    responseFormat: "json_object",
+  });
+
+  const repaired = tryParseJson(raw);
+  assertUsableStructuredData(kind, repaired, { requireSources: false });
+  return structuredDataCandidate(repaired);
 }
 
 function evidenceLinesFromPack(
@@ -167,6 +350,64 @@ function usefulVisuals(visuals: OutputVisual[] | undefined) {
     .slice(0, 4);
 }
 
+/** Паттерны текстовых плейсхолдеров, которыми LLM маскирует отсутствие данных */
+const PLACEHOLDER_RE = /нужно снять|требует уточнения|нет данных|не подтверждена|не найдена|оценка не найдена|требуется сбор|требуется проверка|данные отсутствуют|пока не подтвержден|нужно собрать/i;
+
+/**
+ * Если строка содержит текстовый плейсхолдер, не маскируем его деловой фразой.
+ * Возвращаем только извлеченное число, когда оно реально есть в тексте.
+ */
+function cleanPlaceholder(text: unknown): string | null {
+  if (text == null) return null;
+  const str = String(text).trim();
+  if (!str) return null;
+  if (!PLACEHOLDER_RE.test(str)) return str;
+  // Попытка вытащить число из текста: «Доля ВРП не подтверждена, оценивается в 13.7%»
+  const numMatch = str.match(/(\d[\d\s,.]*\d|\d)/);
+  if (numMatch) {
+    const cleaned = numMatch[1].replace(/\s/g, "").replace(",", ".");
+    const num = parseFloat(cleaned);
+    if (Number.isFinite(num)) return `${num}`;
+  }
+  return null;
+}
+
+/**
+ * Гарантирует, что regionSummary содержит реальные значения, а не плейсхолдеры.
+ * Вызывается ПОСЛЕ guardSourcesAndEvidence, ПЕРЕД assertUsable.
+ */
+function guardRegionPlaceholders(kind: TypedOutput["kind"], data: unknown) {
+  if (kind !== "region") return data;
+  const region = data as RegionAnalysisOutput;
+  if (!region || typeof region !== "object") return data;
+
+  // regionSummary — string-поля, которые LLM заполняет текстом
+  if (region.regionSummary && typeof region.regionSummary === "object") {
+    const rs = region.regionSummary as unknown as Record<string, unknown>;
+    for (const key of ["federalDistrict", "population", "budgetTotal", "oneLiner"]) {
+      if (typeof rs[key] === "string") {
+        const cleaned = cleanPlaceholder(rs[key]);
+        if (cleaned === null) {
+          delete rs[key];
+        }
+      }
+    }
+  }
+
+  if (Array.isArray(region.industryBreakdown)) {
+    region.industryBreakdown.forEach((ind) => {
+      if (typeof ind.currentDigitalState === "string") {
+        const cleaned = cleanPlaceholder(ind.currentDigitalState);
+        if (cleaned === null) {
+          ind.currentDigitalState = "";
+        }
+      }
+    });
+  }
+
+  return region;
+}
+
 function guardSourcesAndEvidence({
   kind,
   data,
@@ -185,7 +426,7 @@ function guardSourcesAndEvidence({
       return {
         ...brief,
         evidence: [
-          "Открытые источники за время поиска не дали проверяемых фактов по теме. Числа, доли рынка и объемы нужно снять как baseline до решения.",
+          "Открытые источники за время поиска не дали проверяемых фактов по теме. Не заполняй числовые факт-поля; вынеси конкретные вопросы в dataGaps.",
         ],
         visuals: usefulVisuals(brief.visuals),
         sources: [],
@@ -207,6 +448,7 @@ function guardSourcesAndEvidence({
     const region = data as RegionAnalysisOutput;
     return {
       ...region,
+      visuals: usefulVisuals(region.visuals),
       sources: [],
       hypotheses: [
         ...(region.hypotheses ?? []),
@@ -251,12 +493,18 @@ function guardSourcesAndEvidence({
 
   if (kind === "region") {
     const region = data as RegionAnalysisOutput;
+    const guarded = guardRegionOutput(
+      region,
+      allowed
+        .filter((s): s is typeof s & { url: string } => Boolean(s.url))
+        .map((s) => ({ title: s.title, url: s.url, snippet: s.excerpt })),
+    );
     return {
-      ...region,
-      sources: safeSources(region.sources, allowed),
+      ...guarded,
+      sources: safeSources(guarded.sources, allowed),
       hypotheses: [
-        ...(region.hypotheses ?? []),
-        ...evidencePack.gaps.filter((gap) => !region.hypotheses?.includes(gap)).slice(0, 3),
+        ...guarded.hypotheses,
+        ...evidencePack.gaps.filter((gap) => !guarded.hypotheses?.includes(gap)).slice(0, 3),
       ].slice(0, 8),
     };
   }
@@ -321,6 +569,9 @@ async function reviewAndReviseStructured({
           "7. Добавь visuals только если они помогают выбрать действие. Не добавляй декоративные счетчики, готовность или силу аргументов без проверяемой основы.",
           "8. Для встречи: сценарий должен быть пригоден для реальной 30-минутной встречи.",
           "9. Для записки ВП: максимум решений, минимум описательности.",
+          "9a. Для регионального анализа: сначала подтверждённые факты, отрасли, приоритеты региона на 5 лет, бюджет, сценарии и конкурентная карта; только потом коммерческие гипотезы Сбера. Обязательно проверь наличие 3-4 regionalScenarios и 4-6 competitors.",
+          "9b. Для регионального анализа запрещены слова 'боль', 'мотив', 'заход', 'пробелы' в пользовательском тексте. Замени на 'ограничение', 'управленческий интерес', 'коммерческая гипотеза', 'что дозапросить'.",
+          "9c. Для конкурентов: если нет регионального источника, пометь как отраслевую гипотезу и добавь nextCheck; не выдавай гипотезу за факт.",
           "10. Источники в sources и evidence должны быть только из списка 'Сырые источники'. Если URL/названия нет в списке — удали факт.",
           "11. Не придумывай доли рынка Сбера, число клиентов, число предприятий, рейтинги и персоналии. Если данных нет — запрашиваем baseline.",
           "12. Не указывай количество пилотных объектов/предприятий/площадок без источника или прямого ввода пользователя. Пиши 'пилотная группа' или 'перечень приоритетных объектов'.",
@@ -335,6 +586,7 @@ async function reviewAndReviseStructured({
     ],
     maxTokens: 8000,
     temperature: 0.12,
+    responseFormat: "json_object",
   });
 
   const critique = tryParseJson(raw) as {
@@ -342,7 +594,7 @@ async function reviewAndReviseStructured({
     problems?: string[];
     revised?: unknown;
   };
-  const revised = critique.revised ?? critique;
+  const revised = critique.revised ?? parsed;
   if (typeof critique.score === "number" && critique.score < 4) {
     const secondRaw = await callLLM({
       messages: [
@@ -366,9 +618,14 @@ async function reviewAndReviseStructured({
       ],
       maxTokens: 8000,
       temperature: 0.1,
+      responseFormat: "json_object",
     });
-    return tryParseJson(secondRaw);
+    const secondPass = tryParseJson(secondRaw);
+    if (isUsableStructuredData(kind, secondPass, { requireSources: false })) return secondPass;
+    if (isUsableStructuredData(kind, revised, { requireSources: false })) return revised;
+    return parsed;
   }
+  if (!isUsableStructuredData(kind, revised, { requireSources: false })) return parsed;
   return revised;
 }
 
@@ -383,6 +640,7 @@ async function callAndParseStructured(
     ],
     maxTokens: 8000,
     temperature: 0.3,
+    responseFormat: "json_object",
   });
 
   try {
@@ -400,6 +658,7 @@ async function callAndParseStructured(
       ],
       maxTokens: 8000,
       temperature: 0.1,
+      responseFormat: "json_object",
     });
     return tryParseJson(fixRaw);
   }
@@ -413,10 +672,12 @@ export async function generateStructured(
   webEvidence: string,
   userPrompt: string,
   sberCatalog: SberGovProject[] = [],
+  onProgress?: (percent: number, label: string) => void,
 ): Promise<TypedOutput> {
   const contract = getContract(session.taskType);
   const kind = getKind(session.taskType);
   const blueprint = getDocumentBlueprint(session);
+  onProgress?.(30, "Извлечение подтверждённых фактов из источников");
   const evidencePack = await buildEvidencePack({ session, webEvidence, memories });
   const formattedEvidencePack = formatEvidencePack(evidencePack);
 
@@ -443,7 +704,7 @@ export async function generateStructured(
     baseSystemPrompt,
     modePrompt(session),
     "КРИТИЧЕСКИ ВАЖНО: Верни ТОЛЬКО валидный JSON. Без markdown, без пояснений, без текста до или после.",
-    "Не выдумывай числа, проценты, статистику без источника. Если данных нет — пиши 'нужно снять baseline'.",
+    "Не выдумывай числа, проценты, статистику без источника. Если данных нет — пиши null (для числовых полей) или опускай поле. Никогда не пиши 'нужно снять', 'требует уточнения', 'не подтверждена' и подобные текстовые плейсхолдеры.",
     "Все публичные факты должны опираться на блок 'Открытые источники'. Если источника нет — это гипотеза, а не факт.",
     "Evidence-first правило: сначала используй Evidence pack. Сырые источники нужны только для сверки и ссылок.",
     "Источники и evidence: используй только URL и названия, которые есть в блоке 'Сырые открытые источники'. Запрещено добавлять источники из памяти модели.",
@@ -468,13 +729,17 @@ export async function generateStructured(
     "",
     `Blueprint документа:\n${blueprint}`,
     "",
-    formatRegionContext(region),
+    formatRegionContext(region, { includeSberPortfolio: session.taskType === "sber_region_strategy" }),
     "",
-    formatSberProjectsForPrompt(session.focusTopic, session.region, 7, sberCatalog),
+    session.taskType === "sber_region_strategy"
+      ? formatSberProjectsForPrompt(session.focusTopic, session.region, 7, sberCatalog)
+      : "",
     "",
     `Правила агента (верхние — самые свежие, выученные на фидбеке):\n${activePlaybooks.map((p) => `• ${p.name}: ${p.rules.slice(0, 5).join("; ")}`).join("\n")}`,
     "",
-    `Память:\n${memories.slice(0, 3).map((m) => `• ${m.title}: ${m.excerpt.slice(0, 200)}`).join("\n") || "нет релевантных записей"}`,
+    session.taskType === "region_strategy"
+      ? "Память: не используется для фактов регионального анализа; факты брать только из открытых источников и карточки региона."
+      : `Память:\n${memories.slice(0, 3).map((m) => `• ${m.title}: ${m.excerpt.slice(0, 200)}`).join("\n") || "нет релевантных записей"}`,
     "",
     `Evidence pack:\n${formattedEvidencePack}`,
     "",
@@ -483,8 +748,11 @@ export async function generateStructured(
     "Качество ответа:",
     "- Сначала управленческое решение, потом доказательства.",
     "- Покажи альтернативы: процессная, финансовая, партнерская/организационная, технологическая. ИИ — только если уместен.",
+    "- Для region_strategy / sber_region_strategy не начинай с предложения Сбера: сначала дай отраслевой срез, стратегические приоритеты региона на 5 лет, структуру бюджета и 3-4 сценария развития региона.",
     "- Добавь 2-4 содержательные visuals в реальных величинах: матрица эффект×реализуемость (item.x/y), сравнение в деньгах (bar с valueRaw+unit), воронка follow-up (funnel), KPI baseline→target (scorecard). Никаких value:null и декоративной 'готовности/силы аргумента'. Если совсем нет чисел — [].",
-    "- Если региональная карточка содержит проекты Сбера, используй их как точку входа и предложи, что дозаполнить в карточке.",
+    session.taskType === "sber_region_strategy"
+      ? "- Если региональная карточка содержит проекты Сбера, используй их как точку входа и предложи, что дозаполнить в карточке."
+      : "- Для анализа региона не формулируй коммерческие действия Сбера; сначала бюджет, отрасли, приоритеты, ЛПР, поставщики и сценарии региона.",
     "- В sources включи только реально использованные источники из блока выше.",
     "",
     `Запрос: ${userPrompt || session.focusTopic || "Сформируй материал"}`,
@@ -494,8 +762,18 @@ export async function generateStructured(
     .filter(Boolean)
     .join("\n");
 
-  const parsed = await callAndParseStructured(systemMessage, userMessage);
-  const revised = await reviewAndReviseStructured({
+  onProgress?.(40, "Генерация основного анализа");
+  const parsed = await repairStructuredShape({
+    candidate: await callAndParseStructured(systemMessage, userMessage),
+    contract,
+    kind,
+    session,
+    webEvidence,
+    blueprint,
+    evidencePack: formattedEvidencePack,
+  });
+  onProgress?.(55, "Ревизия и проверка качества");
+  const reviewed = await reviewAndReviseStructured({
     parsed,
     contract,
     kind,
@@ -507,6 +785,16 @@ export async function generateStructured(
     console.warn(`[structured] review step skipped: ${error instanceof Error ? error.message : error}`);
     return parsed;
   });
+  onProgress?.(70, "Исправление формы по контракту");
+  const revised = await repairStructuredShape({
+    candidate: reviewed,
+    contract,
+    kind,
+    session,
+    webEvidence,
+    blueprint,
+    evidencePack: formattedEvidencePack,
+  });
 
   const guarded = guardSourcesAndEvidence({
     kind,
@@ -514,6 +802,8 @@ export async function generateStructured(
     evidencePack,
     webEvidence,
   });
+  const cleaned = guardRegionPlaceholders(kind, guarded);
 
-  return { kind, data: guarded } as TypedOutput;
+  assertUsableStructuredData(kind, cleaned, { requireSources: false });
+  return { kind, data: cleaned } as TypedOutput;
 }

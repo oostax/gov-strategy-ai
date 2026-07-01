@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { callLLM } from "@/lib/agents/llm-client";
-import type { OutputSection } from "@/lib/schemas/output";
 import { evolutionResultSchema, type EvolutionResult } from "@/lib/schemas/playbook";
 import { createId } from "@/lib/utils/ids";
 import { nowIso } from "@/lib/utils/dates";
@@ -115,22 +114,6 @@ function publicChangeLog(items: string[], fallback: string) {
       ];
 }
 
-function compactOldSections(sections: OutputSection[]) {
-  const priority = ["MVP", "Метрики", "Риски", "дорож"];
-  const selected = sections
-    .filter((section) => !section.title.toLowerCase().includes("сбер"))
-    .filter((section, index, all) => all.findIndex((candidate) => candidate.title === section.title) === index)
-    .filter((section) => priority.some((item) => section.title.toLowerCase().includes(item.toLowerCase())))
-    .slice(0, 3);
-
-  return selected.map((section) => ({
-    ...section,
-    id: createId("sec"),
-    title: sanitizeUnsupportedClaims(section.title),
-    content: sanitizeUnsupportedClaims(section.content),
-  }));
-}
-
 export async function callCloudEvolution(input: OuroborosEvolutionInput): Promise<EvolutionResult> {
   const activePlaybookNames = input.activePlaybooks.map((item) => item.name).join(", ");
   // Полярность: высокая оценка → закрепляем удачный приём, низкая → исправляем ошибку.
@@ -179,7 +162,6 @@ export async function callCloudEvolution(input: OuroborosEvolutionInput): Promis
   const sourceChecks = patch.sourceChecks.length
     ? patch.sourceChecks
     : ["Подтвердить фактический объем обращений, текущие SLA, бюджет процесса и нормативные ограничения на данных региона."];
-  const carriedSections = compactOldSections(input.output.sections);
 
   const rewrittenAnswer = {
     ...input.output,

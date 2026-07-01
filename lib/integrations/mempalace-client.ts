@@ -70,8 +70,18 @@ async function callMcpStdioTool<T>(toolName: string, args: Record<string, unknow
   const command = process.env.MEMPALACE_COMMAND;
   if (!command) throw new Error("MemPalace MCP command is not configured.");
 
+  const parts = command.split(/\s+/).filter(Boolean);
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  while (parts[0] && /^[A-Za-z_][A-Za-z0-9_]*=/.test(parts[0])) {
+    const [key, ...valueParts] = parts.shift()!.split("=");
+    env[key] = valueParts.join("=");
+  }
+  const cmd = parts[0];
+  const cmdArgs = parts.slice(1);
+  if (!cmd) throw new Error("MemPalace MCP command is empty.");
+
   return new Promise<T>((resolve, reject) => {
-    const child = spawn(command, { shell: true, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(cmd, cmdArgs, { env, stdio: ["pipe", "pipe", "pipe"] });
     const requestId = crypto.randomUUID();
     let stdout = "";
     let stderr = "";

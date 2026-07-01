@@ -11,7 +11,16 @@ function encodeEvent(event: string, data: unknown) {
 
 export async function POST(request: Request) {
   const encoder = new TextEncoder();
-  const input = generateRequestSchema.parse(await request.json());
+
+  let input;
+  try {
+    input = generateRequestSchema.parse(await request.json());
+  } catch {
+    return new Response(JSON.stringify({ error: "Invalid request" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -20,7 +29,7 @@ export async function POST(request: Request) {
       }
 
       try {
-        send("step", { step: "storage", message: "Загружаю сессию" });
+        send("step", { step: "storage", message: "Loading session" });
         const details = await getStorage().getSession(input.sessionId);
         if (!details) throw new Error("Session not found");
 
@@ -29,7 +38,8 @@ export async function POST(request: Request) {
         });
         send("done", result);
       } catch (error) {
-        send("error", { error: error instanceof Error ? error.message : "Generation failed" });
+        console.error("[generate/stream]", error);
+        send("error", { error: "Generation failed" });
       } finally {
         controller.close();
       }

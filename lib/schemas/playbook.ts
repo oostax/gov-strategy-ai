@@ -26,6 +26,7 @@ export const playbookSchema = z.object({
   version: z.number(),
   updatedAt: z.string(),
   history: z.array(playbookHistorySchema),
+  searchQueries: z.record(z.string(), z.array(z.string())).optional(),
 });
 
 export const updatePlaybookSchema = playbookSchema.pick({

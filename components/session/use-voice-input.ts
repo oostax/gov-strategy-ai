@@ -145,7 +145,6 @@ async function convertToWav(blob: Blob): Promise<Blob> {
   // Берём первый канал (mono)
   const channelData = audioBuffer.getChannelData(0);
   const sampleRate = audioBuffer.sampleRate;
-  const numSamples = channelData.length;
 
   // Кодируем в WAV
   const wavBuffer = encodeWav(channelData, sampleRate);

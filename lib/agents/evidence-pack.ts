@@ -1,5 +1,6 @@
 import type { SessionProfile } from "@/lib/schemas/session";
 import { callLLM } from "./llm-client";
+import { jsonrepair } from "jsonrepair";
 
 export interface EvidencePack {
   facts: Array<{
@@ -41,7 +42,13 @@ function repairJson(raw: string) {
 function parsePack(raw: string): EvidencePack {
   const cleaned = repairJson(raw);
   const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-  const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : cleaned) as Partial<EvidencePack>;
+  const candidate = jsonMatch ? jsonMatch[0] : cleaned;
+  let parsed: Partial<EvidencePack>;
+  try {
+    parsed = JSON.parse(candidate) as Partial<EvidencePack>;
+  } catch {
+    parsed = JSON.parse(jsonrepair(candidate)) as Partial<EvidencePack>;
+  }
   return {
     facts: Array.isArray(parsed.facts) ? parsed.facts.slice(0, 8) as EvidencePack["facts"] : [],
     gaps: Array.isArray(parsed.gaps) ? parsed.gaps.slice(0, 8).map(String) : emptyEvidencePack.gaps,
@@ -71,6 +78,7 @@ export async function buildEvidencePack({
   const raw = await callLLM({
     temperature: 0.05,
     maxTokens: 3500,
+    responseFormat: "json_object",
     messages: [
       {
         role: "system",
