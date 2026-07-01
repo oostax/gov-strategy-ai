@@ -86,6 +86,75 @@ function isFederalInfrastructureAlternative(value: { vendor?: string; product?: 
   return /сертификат\s+минцифр|минцифр[аы]\s+россии|единая информационная система|(?:^|\s)еис(?:\s|$)|zakupki\.gov\.ru|независимый регистратор/.test(text);
 }
 
+// Единый заголовок блока — тот же визуальный язык, что и у синтез-карточек сверху.
+function SectionHeader({
+  icon: Icon,
+  title,
+  subtitle,
+  count,
+}: {
+  icon: typeof Building2;
+  title: string;
+  subtitle?: string;
+  count?: number;
+}) {
+  return (
+    <div className="mb-4 flex items-center gap-2.5">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+        <Icon className="size-4" />
+      </span>
+      <div className="min-w-0">
+        <h3 className="flex items-center gap-2 text-sm font-semibold leading-tight">
+          {title}
+          {typeof count === "number" && (
+            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+              {count}
+            </span>
+          )}
+        </h3>
+        {subtitle && <p className="text-[11px] leading-tight text-muted-foreground">{subtitle}</p>}
+      </div>
+    </div>
+  );
+}
+
+// Шаблонная «вода» в ограничениях отрасли (дублируется на каждой отрасли) — не несёт смысла.
+function isBoilerplateLimitation(value: string | undefined | null) {
+  if (!value?.trim()) return true;
+  return /дефицитн(?:ая|ой|ый|ым)\s+бюджетн|бюджетн(?:ая|ой)\s+рамк|запуск\s+новых\s+инициатив\s+ограничен|ограничивает\s+финансирование\s+новых\s+проектов/i.test(value);
+}
+
+function meaningfulLimitations(list: string[] | undefined) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const lim of list ?? []) {
+    if (isEmptyAnalysisText(lim) || isBoilerplateLimitation(lim)) continue;
+    const key = lim.trim().toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(lim.trim());
+  }
+  return result;
+}
+
+// Гипотезы приходят с висячими пояснениями в скобках — чистим до законченной формулировки.
+function cleanHypothesis(value: string): string {
+  return cleanDisplayText(value)
+    .replace(/\s*\([^)]*(?:логичес|вытека|предполож|гипотез|интерес|официальн)[^)]*\)/gi, "")
+    .replace(/[\s,;:–—-]+$/g, "")
+    .trim();
+}
+
+function initials(name: string | undefined): string {
+  return (name ?? "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
 export function RegionDashboard({ data }: { data: RegionAnalysisOutput }) {
   return (
     <div className="space-y-5">
@@ -109,45 +178,46 @@ export function RegionDashboard({ data }: { data: RegionAnalysisOutput }) {
         </div>
       )}
 
-      {/* Отраслевая структура */}
-      <div id="industries" className="scroll-mt-56">
-        <IndustrySection items={data.industryBreakdown} />
-      </div>
-
-      {/* Ключевые игроки региона */}
-      {data.keyPlayers && data.keyPlayers.length > 0 && (
-        <div id="key-players" className="scroll-mt-56">
-          <KeyPlayersSection players={data.keyPlayers} />
-        </div>
-      )}
-
-      {/* Бюджетный ландшафт */}
+      {/* Бюджет — денежная основа, сразу подкрепляет выводы синтеза */}
       <div id="budget" className="scroll-mt-56">
         <BudgetSection landscape={data.budgetLandscape} />
       </div>
 
-      {/* Стратегические приоритеты */}
-      <div id="priorities" className="scroll-mt-56">
-        <PrioritiesSection priorities={data.strategicPriorities} />
-      </div>
-
-      <div id="scenarios" className="scroll-mt-56">
-        <ScenariosSection scenarios={data.regionalScenarios} />
-      </div>
-
-      {/* Инфографика из реальных чисел (доли ВРП, структура бюджета) */}
+      {/* Инфографика из реальных чисел (доли ВРП, структура бюджета) — рядом с цифрами */}
       {data.visuals && data.visuals.length > 0 && (
         <div id="visuals" className="scroll-mt-56">
           <VisualsSection visuals={data.visuals} />
         </div>
       )}
 
+      {/* Что регион закрепил официально и куда движется */}
+      <div id="priorities" className="scroll-mt-56">
+        <PrioritiesSection priorities={data.strategicPriorities} />
+      </div>
+
+      {/* Как может развиваться регион */}
+      <div id="scenarios" className="scroll-mt-56">
+        <ScenariosSection scenarios={data.regionalScenarios} />
+      </div>
+
+      {/* Реальная экономика: отрасли и крупные организации */}
+      <div id="industries" className="scroll-mt-56">
+        <IndustrySection items={data.industryBreakdown} />
+      </div>
+
+      {data.keyPlayers && data.keyPlayers.length > 0 && (
+        <div id="key-players" className="scroll-mt-56">
+          <KeyPlayersSection players={data.keyPlayers} />
+        </div>
+      )}
+
+      {/* Кто принимает решения */}
       <div id="stakeholders" className="scroll-mt-56">
         <StakeholderSection stakeholders={data.stakeholderMap} />
       </div>
 
       <div id="competition" className="scroll-mt-56">
-        <CompetitionSection competitors={data.competitiveLandscape} checks={data.hypotheses ?? []} />
+        <CompetitionSection competitors={data.competitiveLandscape} />
       </div>
 
       {/* Источники */}
@@ -501,59 +571,48 @@ function GapRow({ gap, index }: { gap: RegionStrategyRealityGap; index: number }
 }
 
 function IndustrySection({ items }: { items: RegionAnalysisOutput["industryBreakdown"] }) {
-  const visibleItems = (items ?? []).filter((item) =>
-    item.keyEnterprises?.length > 0 ||
-    Boolean(item.currentDigitalState?.trim()) ||
-    item.limitations?.some((lim) => !isEmptyAnalysisText(lim) && !/дефицитн(?:ая|ой)\s+бюджетн(?:ая|ой)\s+рамк|запуск\s+новых\s+инициатив\s+ограничен/i.test(lim)),
-  );
-  if (!visibleItems.length) return null;
+  const rows = (items ?? [])
+    .map((item) => ({ item, lims: meaningfulLimitations(item.limitations) }))
+    .filter(({ item, lims }) =>
+      (item.keyEnterprises?.length ?? 0) > 0 || Boolean(item.currentDigitalState?.trim()) || lims.length > 0,
+    );
+  if (!rows.length) return null;
   return (
     <Card className="rounded-2xl">
-      <CardContent className="p-4">
-        <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold">
-          <Building2 className="size-4 text-muted-foreground" />
-          Отраслевая структура
-        </h3>
-        <div className="space-y-3">
-          {visibleItems.map((item) => (
-            <div key={item.id} className="rounded-xl border bg-muted/20 p-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm font-semibold">{item.name}</p>
-                <div className="flex gap-1">
-                  {item.keyEnterprises?.length > 0 && (
-                    <span className="rounded-full bg-background px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                      организаций: {item.keyEnterprises.length}
-                    </span>
-                  )}
-                  {item.limitations?.filter((lim) => !isEmptyAnalysisText(lim)).length > 0 && (
-                    <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-700">
-                      ограничений: {item.limitations.filter((lim) => !isEmptyAnalysisText(lim)).length}
-                    </span>
-                  )}
-                </div>
+      <CardContent className="p-4 sm:p-5">
+        <SectionHeader icon={Building2} title="Отраслевая структура" subtitle="Опорные отрасли и их ключевые предприятия" />
+        <div className="grid gap-2.5 sm:grid-cols-2">
+          {rows.map(({ item, lims }) => (
+            <div key={item.id} className="flex flex-col rounded-2xl border bg-gradient-to-br from-card to-muted/20 p-3.5">
+              <div className="flex items-start justify-between gap-2">
+                <p className="text-sm font-semibold leading-snug">{item.name}</p>
+                {(item.keyEnterprises?.length ?? 0) > 0 && (
+                  <span className="shrink-0 rounded-full bg-primary/[0.08] px-2 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+                    {item.keyEnterprises.length} орг.
+                  </span>
+                )}
               </div>
-              {item.keyEnterprises && item.keyEnterprises.length > 0 && (
-                <div className="mt-3 grid gap-1.5 sm:grid-cols-2">
-                  {item.keyEnterprises.slice(0, 2).map((e, i) => (
-                    <div key={i} className="rounded-lg bg-background/70 px-2.5 py-2 text-xs">
-                      <span className="font-medium">{e.name}</span>
-                      {e.description && <span className="text-muted-foreground"> — {e.description}</span>}
-                    </div>
+              {(item.keyEnterprises?.length ?? 0) > 0 && (
+                <ul className="mt-2.5 space-y-1.5">
+                  {item.keyEnterprises.slice(0, 4).map((e, i) => (
+                    <li key={i} className="flex gap-2 text-xs leading-snug">
+                      <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-primary/40" aria-hidden />
+                      <span>
+                        <span className="font-medium">{e.name}</span>
+                        {e.description && <span className="text-muted-foreground"> — {e.description}</span>}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {lims.length > 0 && (
+                <div className="mt-auto space-y-1 border-t pt-2.5">
+                  {lims.slice(0, 2).map((lim, i) => (
+                    <p key={i} className="flex gap-1.5 text-[11px] leading-snug text-amber-700 dark:text-amber-400">
+                      <TriangleAlert className="mt-0.5 size-3 shrink-0" /> {lim}
+                    </p>
                   ))}
                 </div>
-              )}
-              {(item.keyEnterprises?.length > 2 || item.limitations?.some((lim) => !isEmptyAnalysisText(lim))) && (
-                <DetailsToggle>
-                  {item.keyEnterprises?.slice(2).map((e, i) => (
-                    <div key={`e-${i}`} className="rounded-lg bg-background/70 px-2.5 py-2 text-xs">
-                      <span className="font-medium">{e.name}</span>
-                      {e.description && <span className="text-muted-foreground"> — {e.description}</span>}
-                    </div>
-                  ))}
-                  {item.limitations?.filter((lim) => !isEmptyAnalysisText(lim)).map((lim, i) => (
-                    <p key={`l-${i}`} className="rounded-lg bg-destructive/10 px-2 py-1 text-[11px] text-destructive">{lim}</p>
-                  ))}
-                </DetailsToggle>
               )}
             </div>
           ))}
@@ -567,11 +626,8 @@ function KeyPlayersSection({ players }: { players: NonNullable<RegionAnalysisOut
   if (!players?.length) return null;
   return (
     <Card className="rounded-2xl">
-      <CardContent className="p-4">
-        <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold">
-          <Building2 className="size-4 text-muted-foreground" />
-          Крупные организации и операторы ({players.length})
-        </h3>
+      <CardContent className="p-4 sm:p-5">
+        <SectionHeader icon={Building2} title="Крупные организации и операторы" subtitle="Кто формирует экономику региона" count={players.length} />
         <div className="grid gap-2 sm:grid-cols-2">
           {players.map((p) => (
             <div key={p.id} className="rounded-xl border p-3">
@@ -627,11 +683,8 @@ function BudgetSection({ landscape }: { landscape: RegionAnalysisOutput["budgetL
     : undefined;
   return (
     <Card className="rounded-2xl">
-      <CardContent className="p-4">
-        <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold">
-          <Landmark className="size-4 text-muted-foreground" />
-          Бюджет и государственные программы
-        </h3>
+      <CardContent className="p-4 sm:p-5">
+        <SectionHeader icon={Landmark} title="Бюджет и государственные программы" subtitle="Куда идут деньги региона" />
         <div className="mb-3 grid gap-2 sm:grid-cols-3">
           {landscape.totalBudget && (
             <div className="rounded-xl bg-muted/30 p-3">
@@ -682,30 +735,20 @@ function BudgetSection({ landscape }: { landscape: RegionAnalysisOutput["budgetL
         })()}
         {landscape.keyPrograms?.length > 0 && (
           <div className="space-y-2">
-            <p className="text-xs font-semibold text-muted-foreground">Государственные программы и национальные проекты</p>
-            {landscape.keyPrograms.slice(0, 3).map((prog) => (
-              <div key={prog.id} className="flex items-start gap-2 rounded-lg border p-2.5">
-                <Landmark className="mt-0.5 size-3 shrink-0 text-primary" />
-                <div className="min-w-0">
-                  <p className="text-xs font-medium">{prog.name}</p>
-                  <p className="text-[10px] text-muted-foreground">
-                    {prog.owner} · {prog.budget} · {prog.status}
-                  </p>
-                </div>
-              </div>
-            ))}
-            {landscape.keyPrograms.length > 3 && (
-              <DetailsToggle>
-                {landscape.keyPrograms.slice(3).map((prog) => (
-                  <div key={prog.id} className="rounded-lg border p-2">
-                    <p className="text-xs font-medium">{prog.name}</p>
-                    <p className="text-[10px] text-muted-foreground">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Программы и национальные проекты</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {landscape.keyPrograms.slice(0, 6).map((prog) => (
+                <div key={prog.id} className="flex items-start gap-2 rounded-xl border bg-muted/10 p-2.5">
+                  <Landmark className="mt-0.5 size-3.5 shrink-0 text-primary" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium leading-snug">{prog.name}</p>
+                    <p className="mt-0.5 text-[10px] leading-snug text-muted-foreground">
                       {[prog.owner, prog.budget, prog.status].filter(Boolean).join(" · ")}
                     </p>
                   </div>
-                ))}
-              </DetailsToggle>
-            )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
         {landscape.dataNeeded && (
@@ -718,84 +761,56 @@ function BudgetSection({ landscape }: { landscape: RegionAnalysisOutput["budgetL
 
 function PrioritiesSection({ priorities }: { priorities: RegionAnalysisOutput["strategicPriorities"] }) {
   if (!priorities) return null;
+  const confirmed = (priorities.confirmed ?? []).filter((x) => !isEmptyAnalysisText(x));
+  const hypothesized = (priorities.hypothesized ?? []).map(cleanHypothesis).filter((x) => x.length > 12);
+  const roadmap = priorities.roadmap ?? [];
+  if (!confirmed.length && !hypothesized.length && !roadmap.length) return null;
   return (
     <Card className="rounded-2xl">
-      <CardContent className="p-4">
-        <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold">
-          <Zap className="size-4 text-muted-foreground" />
-          Стратегические приоритеты
-        </h3>
-        {priorities.confirmed?.length > 0 && (
-          <div className="mb-3">
-            <div className="grid gap-2 sm:grid-cols-2">
-              {priorities.confirmed.slice(0, 4).map((item, i) => (
-                <div key={i} className="flex items-start gap-2 rounded-xl border bg-emerald-500/[0.03] p-2.5 text-xs">
-                  <CheckCircle2 className="mt-0.5 size-3 shrink-0 text-emerald-500" />
-                  {item}
-                </div>
-              ))}
-            </div>
-            {priorities.confirmed.length > 4 && (
-              <DetailsToggle>
-                <ul className="space-y-1">
-                  {priorities.confirmed.slice(4).map((item, i) => (
-                    <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
-                      <CheckCircle2 className="mt-0.5 size-3 shrink-0 text-emerald-500" />
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-              </DetailsToggle>
-            )}
+      <CardContent className="p-4 sm:p-5">
+        <SectionHeader icon={Target} title="Стратегические приоритеты" subtitle="Что закреплено официально и куда движется регион" />
+        {confirmed.length > 0 && (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {confirmed.map((item, i) => (
+              <div key={i} className="flex items-start gap-2 rounded-xl border bg-emerald-500/[0.03] p-2.5 text-xs leading-snug">
+                <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-emerald-500" />
+                {item}
+              </div>
+            ))}
           </div>
         )}
-        {priorities.hypothesized?.length > 0 && (
-          <div>
-            <p className="mb-1 text-xs font-semibold text-amber-600">Требует подтверждения:</p>
+        {hypothesized.length > 0 && (
+          <div className="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/[0.04] p-3">
+            <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-amber-700 dark:text-amber-400">
+              <HelpCircle className="size-3.5" /> Вероятно в приоритете, но официально не закреплено
+            </p>
             <ul className="space-y-1">
-              {priorities.hypothesized.slice(0, 2).map((item, i) => (
-                <li key={i} className="flex items-start gap-2 text-xs">
-                  <HelpCircle className="mt-0.5 size-3 shrink-0 text-amber-500" />
-                  {item}
-                </li>
+              {hypothesized.slice(0, 3).map((item, i) => (
+                <li key={i} className="text-xs leading-snug text-muted-foreground">• {item}</li>
               ))}
             </ul>
           </div>
         )}
-        {priorities.roadmap && priorities.roadmap.length > 0 && (
-          <div className="mt-4 border-t pt-3">
-            <p className="mb-2 text-xs font-semibold text-muted-foreground">Горизонт 5 лет</p>
-            <div className="grid gap-2 lg:grid-cols-4">
-              {priorities.roadmap.slice(0, 4).map((item) => (
+        {roadmap.length > 0 && (
+          <div className="mt-4 border-t pt-3.5">
+            <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Горизонт 5 лет</p>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+              {roadmap.map((item) => (
                 <div key={item.id} className="rounded-xl border bg-muted/10 p-2.5">
                   <span className="inline-flex rounded-md bg-primary/10 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-primary">
                     {item.period}
                   </span>
-                  <div className="mt-2 min-w-0">
-                    <p className="text-xs font-semibold leading-snug">{item.title}</p>
-                    {item.linkedProgram && (
-                      <p className="text-[10px] text-muted-foreground">Связь: {item.linkedProgram}</p>
-                    )}
-                  </div>
+                  <p className="mt-2 text-xs font-semibold leading-snug">{item.title}</p>
+                  {item.linkedProgram && (
+                    <p className="mt-0.5 text-[10px] leading-snug text-muted-foreground">{item.linkedProgram}</p>
+                  )}
                 </div>
               ))}
             </div>
-            {priorities.roadmap.length > 4 && (
-              <DetailsToggle>
-                {priorities.roadmap.slice(4).map((item) => (
-                  <div key={item.id} className="flex gap-3 text-muted-foreground">
-                    <span className="mt-0.5 shrink-0 rounded-md bg-muted px-2 py-0.5 text-[10px] font-semibold tabular-nums">
-                      {item.period}
-                    </span>
-                    <p className="text-xs leading-snug">{item.title}</p>
-                  </div>
-                ))}
-              </DetailsToggle>
-            )}
           </div>
         )}
         {priorities.source && (
-          <p className="mt-2 text-[10px] text-muted-foreground">Источник: {priorities.source}</p>
+          <p className="mt-3 text-[10px] leading-snug text-muted-foreground">Источник: {priorities.source}</p>
         )}
       </CardContent>
     </Card>
@@ -811,26 +826,11 @@ function StakeholderSection({ stakeholders }: { stakeholders: RegionAnalysisOutp
   if (!visible.length) return null;
   return (
     <Card className="rounded-2xl">
-      <CardContent className="p-4">
-        <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold">
-          <Users className="size-4 text-muted-foreground" />
-          Руководители и ведомства ({visible.length})
-        </h3>
-        <div className="grid gap-2 sm:grid-cols-2">
+      <CardContent className="p-4 sm:p-5">
+        <SectionHeader icon={Users} title="Руководители и ведомства" subtitle="Кто принимает решения в регионе" count={visible.length} />
+        <div className="grid gap-3 lg:grid-cols-2">
           {visible.map((s) => (
-            <div key={s.id} className="rounded-xl border p-3">
-              <p className="text-sm font-medium">{s.name || s.role || s.department}</p>
-              <p className="text-[11px] text-muted-foreground">{s.role}, {s.department}</p>
-              {s.managementInterest && <p className="mt-2 text-xs">{s.managementInterest}</p>}
-              {(s.achievements || s.recentNews || s.managedBudget || s.engagementPrinciple) && (
-                <DetailsToggle>
-                  {s.achievements && <p className="text-xs"><span className="font-medium">Результаты:</span> {s.achievements}</p>}
-                  {s.recentNews && <p className="text-xs text-muted-foreground/80"><span className="font-medium text-foreground">События:</span> {s.recentNews}</p>}
-                  {s.managedBudget && <p className="text-xs text-muted-foreground/80"><span className="font-medium text-foreground">Ресурс:</span> {s.managedBudget}</p>}
-                  {s.engagementPrinciple && <p className="text-xs text-muted-foreground/80"><span className="font-medium text-foreground">Линия взаимодействия:</span> {s.engagementPrinciple}</p>}
-                </DetailsToggle>
-              )}
-            </div>
+            <StakeholderCard key={s.id} stakeholder={s} />
           ))}
         </div>
       </CardContent>
@@ -838,59 +838,144 @@ function StakeholderSection({ stakeholders }: { stakeholders: RegionAnalysisOutp
   );
 }
 
+function StakeholderCard({ stakeholder: s }: { stakeholder: RegionAnalysisOutput["stakeholderMap"][number] }) {
+  const chips = [
+    s.managedBudget ? { label: "Ресурс", value: s.managedBudget } : null,
+    s.engagementPrinciple ? { label: "Линия взаимодействия", value: s.engagementPrinciple } : null,
+  ].filter((x): x is { label: string; value: string } => Boolean(x));
+  return (
+    <div className="flex flex-col rounded-2xl border bg-gradient-to-br from-card to-muted/20 p-4 shadow-sm">
+      <div className="flex items-start gap-3">
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-sm font-bold text-primary">
+          {initials(s.name)}
+        </span>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold leading-snug">{s.name}</p>
+          <p className="text-[11px] leading-snug text-muted-foreground">{[s.role, s.department].filter(Boolean).join(", ")}</p>
+        </div>
+      </div>
+      {s.managementInterest && (
+        <div className="mt-3 rounded-xl bg-primary/[0.05] px-2.5 py-2 ring-1 ring-primary/10">
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-primary/80">Интерес</p>
+          <p className="mt-0.5 text-xs leading-snug">{s.managementInterest}</p>
+        </div>
+      )}
+      {s.achievements && (
+        <p className="mt-2.5 text-xs leading-snug">
+          <span className="font-medium">Результаты:</span> <span className="text-muted-foreground">{s.achievements}</span>
+        </p>
+      )}
+      {s.recentNews && (
+        <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+          <span className="font-medium text-foreground">События:</span> {s.recentNews}
+        </p>
+      )}
+      {chips.length > 0 && (
+        <div className="mt-auto flex flex-wrap gap-1.5 pt-2.5">
+          {chips.map((c, i) => (
+            <span key={i} className="rounded-md bg-muted px-2 py-0.5 text-[10px] leading-snug text-muted-foreground">
+              <span className="font-medium text-foreground">{c.label}:</span> {c.value}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ScenariosSection({ scenarios }: { scenarios?: RegionAnalysisOutput["regionalScenarios"] }) {
   if (!scenarios?.length) return null;
   return (
     <Card className="rounded-2xl">
-      <CardContent className="p-4">
-        <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold">
-          <Route className="size-4 text-muted-foreground" />
-          Сценарии развития
-        </h3>
+      <CardContent className="p-4 sm:p-5">
+        <SectionHeader icon={Route} title="Сценарии развития" subtitle="Как может развиваться регион и на что смотреть" />
         <div className="grid gap-3 lg:grid-cols-2">
-          {scenarios.map((scenario) => (
-            <div key={scenario.id} className="relative overflow-hidden rounded-xl border bg-muted/10 p-3">
-              <div className={`absolute inset-x-0 top-0 h-1 ${
-                scenario.probability === "high" ? "bg-emerald-500" : scenario.probability === "medium" ? "bg-amber-500" : "bg-muted-foreground/40"
-              }`} />
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <p className="text-sm font-semibold leading-snug">{scenario.title}</p>
-                <span className="rounded-full bg-background px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
-                  {scenario.horizon} · {probabilityLabel(scenario.probability)}
-                </span>
-              </div>
-              {cleanDisplayText(scenario.trigger) && <p className="mt-2 text-xs"><span className="font-medium">Триггер:</span> {cleanDisplayText(scenario.trigger)}</p>}
-              {(scenario.budgetImplication || scenario.industryImpact || scenario.regionMoves?.length || scenario.earlySignals?.length) && (
-                <DetailsToggle>
-                  {scenario.budgetImplication && (
-                    <p className="text-xs text-muted-foreground">
-                      <span className="font-medium text-foreground">Бюджет:</span> {cleanDisplayText(scenario.budgetImplication)}
-                    </p>
-                  )}
-                  {scenario.industryImpact && (
-                    <p className="text-xs text-muted-foreground">
-                      <span className="font-medium text-foreground">Отрасли:</span> {cleanDisplayText(scenario.industryImpact)}
-                    </p>
-                  )}
-                  {scenario.regionMoves?.length > 0 && (
-                    <ul className="space-y-1">
-                      {scenario.regionMoves.map(cleanDisplayText).filter(Boolean).slice(0, 3).map((move, index) => (
-                        <li key={index} className="text-[11px] text-muted-foreground">• {move}</li>
-                      ))}
-                    </ul>
-                  )}
-                  {scenario.earlySignals?.length > 0 && (
-                    <p className="text-[11px] text-amber-700">
-                      Следить: {scenario.earlySignals.map(cleanDisplayText).filter(Boolean).slice(0, 3).join("; ")}
-                    </p>
-                  )}
-                </DetailsToggle>
-              )}
-            </div>
+          {scenarios.map((scenario, idx) => (
+            <ScenarioCard key={scenario.id} scenario={scenario} index={idx} />
           ))}
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function ScenarioCard({
+  scenario,
+  index,
+}: {
+  scenario: NonNullable<RegionAnalysisOutput["regionalScenarios"]>[number];
+  index: number;
+}) {
+  const tone =
+    scenario.probability === "high"
+      ? { bar: "bg-emerald-500", chip: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400 ring-emerald-500/20" }
+      : scenario.probability === "medium"
+        ? { bar: "bg-amber-500", chip: "bg-amber-500/10 text-amber-700 dark:text-amber-400 ring-amber-500/20" }
+        : { bar: "bg-slate-400", chip: "bg-muted text-muted-foreground ring-border" };
+  const trigger = cleanDisplayText(scenario.trigger);
+  const budget = cleanDisplayText(scenario.budgetImplication);
+  const industry = cleanDisplayText(scenario.industryImpact);
+  const moves = (scenario.regionMoves ?? []).map(cleanDisplayText).filter(Boolean).slice(0, 3);
+  const signals = (scenario.earlySignals ?? []).map(cleanDisplayText).filter(Boolean).slice(0, 3);
+  return (
+    <div
+      style={{ animationDelay: `${Math.min(index, 6) * 70}ms` }}
+      className="group relative flex flex-col overflow-hidden rounded-2xl border bg-card shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md motion-reduce:transform-none animate-in fade-in slide-in-from-bottom-3 fill-mode-both duration-500 motion-reduce:animate-none"
+    >
+      <span className={`absolute inset-x-0 top-0 h-1 ${tone.bar}`} aria-hidden />
+      <div className="p-4">
+        <div className="flex items-start justify-between gap-2">
+          <p className="text-sm font-semibold leading-snug">{scenario.title}</p>
+          <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ${tone.chip}`}>
+            {probabilityLabel(scenario.probability)}
+          </span>
+        </div>
+        {scenario.horizon && (
+          <p className="mt-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">{scenario.horizon}</p>
+        )}
+        {trigger && (
+          <div className="mt-2.5 rounded-xl bg-muted/40 px-2.5 py-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Триггер</p>
+            <p className="mt-0.5 text-xs leading-snug">{trigger}</p>
+          </div>
+        )}
+        {(budget || industry) && (
+          <div className="mt-2.5 grid gap-2">
+            {budget && <ScenarioFact icon={Landmark} label="Бюджет" value={budget} />}
+            {industry && <ScenarioFact icon={Building2} label="Отрасли" value={industry} />}
+          </div>
+        )}
+        {moves.length > 0 && (
+          <div className="mt-2.5">
+            <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Ходы региона</p>
+            <ul className="space-y-1">
+              {moves.map((m, i) => (
+                <li key={i} className="flex gap-1.5 text-[11px] leading-snug">
+                  <ArrowRight className="mt-0.5 size-3 shrink-0 text-primary/60" /> {m}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {signals.length > 0 && (
+          <p className="mt-auto rounded-xl bg-amber-500/[0.06] px-2.5 py-1.5 text-[11px] leading-snug text-amber-700 dark:text-amber-400">
+            <span className="font-semibold">Следить:</span> {signals.join("; ")}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ScenarioFact({ icon: Icon, label, value }: { icon: typeof Landmark; label: string; value: string }) {
+  return (
+    <div className="flex gap-2 rounded-xl border bg-muted/10 px-2.5 py-2">
+      <Icon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+      <div className="min-w-0">
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
+        <p className="mt-0.5 text-[11px] leading-snug">{value}</p>
+      </div>
+    </div>
   );
 }
 
@@ -903,53 +988,40 @@ function probabilityLabel(value: string) {
   return labels[value] || value;
 }
 
-function CompetitionSection({ competitors, checks }: { competitors: RegionAnalysisOutput["competitiveLandscape"]; checks: string[] }) {
+function CompetitionSection({ competitors }: { competitors: RegionAnalysisOutput["competitiveLandscape"] }) {
   const visible = (competitors ?? []).filter((item) => !isFederalInfrastructureAlternative(item));
   return (
     <Card className="rounded-2xl">
-      <CardContent className="p-4">
-        <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold">
-          <Building2 className="size-4 text-muted-foreground" />
-          Поставщики и инфраструктурные альтернативы
-        </h3>
-        {!visible.length && (
-          <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.04] p-3">
-            <p className="text-sm font-medium">Региональные поставщики пока не подтверждены открытыми источниками</p>
-            <p className="mt-1 text-xs leading-snug text-muted-foreground">
-              В материал не добавлены федеральные порталы, агрегаторы тендеров и неподтверждённые компании. Для анализа конкуренции нужны карточки контрактов, региональные закупки или официальный аудит внедрений.
-            </p>
-            {checks.length > 0 && (
-              <DetailsToggle>
-                {checks.slice(0, 4).map((item, index) => (
-                  <p key={index} className="rounded-lg bg-background/70 px-2.5 py-2 text-[11px] text-muted-foreground">{item}</p>
-                ))}
-              </DetailsToggle>
-            )}
+      <CardContent className="p-4 sm:p-5">
+        <SectionHeader icon={Building2} title="Поставщики и альтернативы" subtitle="Кто ещё работает с регионом" />
+        {!visible.length ? (
+          <p className="rounded-xl border border-dashed bg-muted/20 px-3 py-5 text-center text-xs leading-snug text-muted-foreground">
+            Региональные поставщики не подтверждены открытыми источниками.
+          </p>
+        ) : (
+          <div className="grid gap-2.5 sm:grid-cols-2">
+            {visible.map((c) => (
+              <div key={c.id} className="rounded-xl border p-3">
+                <div className="flex items-start gap-2.5">
+                  <span
+                    className={`mt-1 size-2 shrink-0 rounded-full ${
+                      c.threatLevel === "high" ? "bg-red-500" : c.threatLevel === "medium" ? "bg-amber-500" : "bg-emerald-500"
+                    }`}
+                    aria-hidden
+                  />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium leading-snug">{c.vendor}</p>
+                    <p className="text-[11px] leading-snug text-muted-foreground">{[c.product, c.where].filter(Boolean).join(" · ")}</p>
+                    {c.evidence && <p className="mt-1.5 text-[11px] leading-snug">{c.evidence}</p>}
+                    {c.sberCounterPosition && (
+                      <p className="mt-1 text-[11px] leading-snug text-primary">Позиция Сбера: {c.sberCounterPosition}</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         )}
-        <div className="space-y-2">
-          {visible.map((c) => (
-            <div key={c.id} className="flex items-start gap-3 rounded-xl border p-3">
-              <span
-                className={`mt-0.5 size-2 shrink-0 rounded-full ${
-                  c.threatLevel === "high" ? "bg-red-500" : c.threatLevel === "medium" ? "bg-amber-500" : "bg-emerald-500"
-                }`}
-              />
-              <div className="min-w-0">
-                <p className="text-sm font-medium">{c.vendor}</p>
-                <p className="text-xs text-muted-foreground">{c.product} · {c.where}</p>
-                {(c.stage || c.evidence || c.incumbentPosition || c.sberCounterPosition) && (
-                  <DetailsToggle>
-                    {c.stage && <p className="text-[11px] text-muted-foreground">Статус: {c.stage}</p>}
-                    {c.evidence && <p className="text-[11px]">Факт: {c.evidence}</p>}
-                    {c.incumbentPosition && <p className="text-[11px] text-muted-foreground">Где закреплён: {c.incumbentPosition}</p>}
-                    {c.sberCounterPosition && <p className="text-[11px] text-primary">Позиция Сбера: {c.sberCounterPosition}</p>}
-                  </DetailsToggle>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
       </CardContent>
     </Card>
   );

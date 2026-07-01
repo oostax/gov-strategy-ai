@@ -4,13 +4,13 @@ import {
   ArrowRight,
   BadgeCheck,
   BarChart3,
-  Building2,
   CalendarDays,
   CheckCircle2,
   ClipboardList,
   Compass,
   FileText,
   Flag,
+  Lightbulb,
   MapPin,
   MessageSquare,
   Route,
@@ -152,11 +152,11 @@ function getSections(output: TypedOutput) {
 
   if (output.kind === "region") {
     return [
-      { href: "#industries", label: "Отрасли", icon: Compass, primary: true },
+      { href: "#insights", label: "Выводы", icon: Lightbulb, primary: true },
       { href: "#budget", label: "Бюджет", icon: BarChart3, primary: true },
       { href: "#priorities", label: "Приоритеты", icon: Target, primary: true },
       { href: "#scenarios", label: "Сценарии", icon: Route, primary: true },
-      { href: "#competition", label: "Альтернативы", icon: Building2, primary: true },
+      { href: "#industries", label: "Отрасли", icon: Compass, primary: true },
       { href: "#sources", label: "Источники", icon: Flag },
     ];
   }
