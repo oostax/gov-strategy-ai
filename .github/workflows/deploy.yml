@@ -7,19 +7,26 @@ on:
 
 concurrency:
   group: deploy-prod
-  cancel-in-progress: false
+  cancel-in-progress: true
+
+# Runtime uses the system Chrome (PUPPETEER_EXECUTABLE_PATH); никогда не качаем
+# бандл Chromium при npm ci — иначе установка висит минутами.
+env:
+  PUPPETEER_SKIP_DOWNLOAD: "true"
+  PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
 
 jobs:
   gate:
     name: Build gate (typecheck + build)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - run: npm ci
+      - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
       - run: npm run build
 
@@ -27,6 +34,7 @@ jobs:
     name: Deploy over SSH
     needs: gate
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Run deploy on server
         uses: appleboy/ssh-action@v1.2.0

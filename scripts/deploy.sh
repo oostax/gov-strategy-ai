@@ -11,6 +11,10 @@ HEALTH_URL="http://127.0.0.1:${PORT}/api/runtime/status"
 
 cd "$APP_DIR"
 
+# Runtime использует системный Chrome (PUPPETEER_EXECUTABLE_PATH) — бандл Chromium при npm ci не качаем.
+export PUPPETEER_SKIP_DOWNLOAD=true
+export PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+
 # --- ЗАЩИТА: не деплоим, если боевые данные всё ещё трекаются в git ---
 # Иначе git reset --hard затрёт свежие сессии на сервере.
 if git ls-files --error-unmatch data/store.json >/dev/null 2>&1; then
