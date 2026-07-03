@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -30,7 +30,6 @@ import {
   taskLabels,
   taskOutputDescription,
   taskWhenToUse,
-  urgencyLabels,
   type CreateSessionInput,
   type DetailLevel,
   type TaskType,
@@ -180,16 +179,16 @@ type SessionApi = ReturnType<typeof useSessionForm>;
 // ── Диалоговый режим ─────────────────────────────────────────────────────────
 
 /**
- * Ключи вопросов детерминированной очереди уточнений. Очередь считается заново
- * при каждом рендере из текущего состояния формы + множества «пропущенных»
- * вопросов; следующим показывается первый релевантный ещё не закрытый вопрос.
+ * Контекстный уточняющий вопрос, сгенерированный ИИ-классификатором под
+ * конкретный бриф. Приходит из /api/sessions/classify (suggestion.clarifications).
+ * `options` — 2-4 готовых варианта (быстрые кнопки); если их нет — свободный ввод.
  */
-type QuestionKey = "region" | "meetingWith" | "meetingGoal" | "context" | "focus";
+type Clarification = { question: string; options?: string[] };
 
 /**
  * Фазы потока. «План материала» — не отдельная фаза, а состояние `clarify`,
- * в котором очередь уточнений исчерпана (currentQuestion === null). Так мы
- * избегаем синхронного setState в эффекте: фаза плана выводится, а не хранится.
+ * в котором динамические вопросы исчерпаны (clarifyIndex >= clarifications.length).
+ * Так мы избегаем синхронного setState в эффекте: фаза плана выводится, а не хранится.
  */
 type Phase = "brief" | "recognizing" | "clarify";
 
@@ -225,7 +224,9 @@ export function ChatFlow({
   const [briefText, setBriefText] = useState("");
   const [answerText, setAnswerText] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
-  const [skipped, setSkipped] = useState<Set<QuestionKey>>(new Set());
+  // Динамические уточнения от ИИ и указатель на текущий вопрос.
+  const [clarifications, setClarifications] = useState<Clarification[]>([]);
+  const [clarifyIndex, setClarifyIndex] = useState(0);
   const [recognized, setRecognized] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
@@ -238,28 +239,20 @@ export function ChatFlow({
     }
   });
 
-  const meetingWith = form.watch("meetingWith");
-  const meetingGoal = form.watch("meetingGoal");
-  const focusTopic = form.watch("focusTopic");
-
-  // Следующий вопрос очереди — чисто из состояния, без обращения к LLM.
-  const currentQuestion = useMemo<QuestionKey | null>(() => {
-    if (!region && !skipped.has("region")) return "region";
-    if (isMeeting && !meetingWith && !skipped.has("meetingWith")) return "meetingWith";
-    if (isMeeting && !meetingGoal && !skipped.has("meetingGoal")) return "meetingGoal";
-    if (!skipped.has("context")) return "context";
-    if (!focusTopic && !skipped.has("focus")) return "focus";
-    return null;
-  }, [region, isMeeting, meetingWith, meetingGoal, focusTopic, skipped]);
+  // Текущий уточняющий вопрос — из динамического списка ИИ, по указателю.
+  const currentClarification =
+    phase === "clarify" && clarifyIndex < clarifications.length
+      ? clarifications[clarifyIndex]
+      : null;
 
   // «План материала» — производное состояние, а не отдельная фаза: показываем,
-  // когда уточнения завершены. Это исключает setState в эффекте.
-  const atPlan = phase === "clarify" && currentQuestion === null;
+  // когда динамические вопросы исчерпаны. Это исключает setState в эффекте.
+  const atPlan = phase === "clarify" && clarifyIndex >= clarifications.length;
 
   // Автоскролл ленты вниз при изменениях.
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [turns, phase, currentQuestion, recognized]);
+  }, [turns, phase, clarifyIndex, recognized]);
 
   const selectedRegionProfile = regions.find((r) => r.id === regionId || r.name === region);
   const emptyRegionCard = Boolean(region) && !selectedRegionProfile;
@@ -276,15 +269,22 @@ export function ChatFlow({
         body: JSON.stringify({ phrase }),
       });
       const data = (await response.json()) as {
-        suggestion?: Record<string, unknown>;
+        suggestion?: Record<string, unknown> & { clarifications?: Clarification[] };
+        clarifications?: Clarification[];
         error?: string;
       };
       if (!response.ok || !data.suggestion) throw new Error(data.error || "Ошибка");
-      applySuggestion(data.suggestion as Partial<CreateSessionInput>);
+      // Динамические вопросы от ИИ (поддерживаем оба варианта размещения в ответе);
+      // вынимаем их до applySuggestion, чтобы не писать не-схемное поле в форму.
+      const { clarifications: rawClarifications, ...suggestionFields } = data.suggestion;
+      const raw = rawClarifications ?? data.clarifications ?? [];
+      applySuggestion(suggestionFields as Partial<CreateSessionInput>);
       // Если классификатор не выделил задачу — используем сам бриф как фокус.
-      if (!data.suggestion.focusTopic) {
+      if (!suggestionFields.focusTopic) {
         form.setValue("focusTopic", phrase, { shouldValidate: false });
       }
+      setClarifications(Array.isArray(raw) ? raw.slice(0, 2) : []);
+      setClarifyIndex(0);
       setRecognized(true);
       setPhase("clarify");
     } catch (error) {
@@ -296,64 +296,26 @@ export function ChatFlow({
     }
   }
 
-  // Записывает ответ пользователя в ленту и пишет значение в форму; очередь
-  // вопросов пересчитывается автоматически (currentQuestion).
   function pushUserTurn(text: string) {
     setTurns((prev) => [...prev, { role: "user", text }]);
   }
 
-  function answerRegion(name: string, id?: string) {
-    selectRegion(name, id);
-    pushUserTurn(name);
-    setAnswerText("");
-  }
-
-  function answerText_meetingWith(value: string) {
+  // Дописывает ответ на уточнение в фокус задачи (для встреч — в контекст),
+  // чтобы он реально влиял на генерацию. Затем сдвигает указатель вопросов.
+  function appendClarificationAnswer(value: string) {
     const v = value.trim();
     if (!v) return;
-    form.setValue("meetingWith", v, { shouldValidate: false });
+    const field = isMeeting ? "meetingContext" : "focusTopic";
+    const existing = form.getValues(field)?.trim();
+    form.setValue(field, existing ? `${existing}\n${v}` : v, { shouldValidate: false });
     pushUserTurn(v);
     setAnswerText("");
+    setClarifyIndex((i) => i + 1);
   }
 
-  function answerText_meetingGoal(value: string) {
-    const v = value.trim();
-    if (!v) return;
-    form.setValue("meetingGoal", v, { shouldValidate: false });
-    pushUserTurn(v);
+  function skipClarification() {
     setAnswerText("");
-  }
-
-  function answerText_context(value: string) {
-    const v = value.trim();
-    if (!v) return;
-    if (isMeeting) {
-      const existing = form.getValues("meetingContext")?.trim();
-      form.setValue("meetingContext", existing ? `${existing}\n${v}` : v, {
-        shouldValidate: false,
-      });
-    } else {
-      const existing = form.getValues("focusTopic")?.trim();
-      form.setValue("focusTopic", existing ? `${existing}\n${v}` : v, {
-        shouldValidate: false,
-      });
-    }
-    setSkipped((prev) => new Set(prev).add("context"));
-    pushUserTurn(v);
-    setAnswerText("");
-  }
-
-  function answerText_focus(value: string) {
-    const v = value.trim();
-    if (v.length < 3) return;
-    form.setValue("focusTopic", v, { shouldValidate: false });
-    pushUserTurn(v);
-    setAnswerText("");
-  }
-
-  function skip(key: QuestionKey) {
-    setSkipped((prev) => new Set(prev).add(key));
-    setAnswerText("");
+    setClarifyIndex((i) => i + 1);
   }
 
   const voiceBusy = voice.state !== "idle";
@@ -383,9 +345,11 @@ export function ChatFlow({
 
       {/* Лента диалога */}
       <div className="space-y-4">
-        {/* 1. Первый вопрос — постоянно виден как открытие диалога */}
+        {/* 1. Первый вопрос — постоянно виден как открытие диалога. Универсально:
+            подходит под любой из 7 типов задач, не только встречу. */}
         <AssistantBubble>
-          Опишите задачу: с кем встреча, по какому региону, что нужно.
+          Опишите задачу: регион, тема и что нужно — подготовка встречи, анализ
+          региона, позиция для ВП, стратегия, сценарии.
         </AssistantBubble>
 
         {/* История реплик */}
@@ -421,21 +385,18 @@ export function ChatFlow({
           </div>
         )}
 
-        {/* 4. Текущий вопрос уточнения + элементы ответа */}
-        {phase === "clarify" && currentQuestion && (
-          <QuestionPrompt
-            question={currentQuestion}
-            regions={regions}
+        {/* 4. Текущий уточняющий вопрос (динамический, от ИИ) + элементы ответа.
+            Ключ по индексу — чтобы поле ввода сбрасывалось между вопросами. */}
+        {currentClarification && (
+          <ClarifyPrompt
+            key={clarifyIndex}
+            clarification={currentClarification}
             answerText={answerText}
             setAnswerText={setAnswerText}
             voice={voice}
             voiceBusy={voiceBusy}
-            onRegion={answerRegion}
-            onMeetingWith={answerText_meetingWith}
-            onMeetingGoal={answerText_meetingGoal}
-            onContext={answerText_context}
-            onFocus={answerText_focus}
-            onSkip={() => skip(currentQuestion)}
+            onAnswer={appendClarificationAnswer}
+            onSkip={skipClarification}
           />
         )}
 
@@ -475,7 +436,7 @@ export function ChatFlow({
       {phase === "brief" && (
         <div className="rounded-2xl border p-4">
           <Textarea
-            placeholder="Например: завтра встреча с Минцифры Татарстана по платформе обращений граждан, нужны тезисы и сценарий"
+            placeholder="Например: нужен анализ Татарстана — бюджет, отрасли и приоритеты; или: позиция для ВП по переходу на отечественное ПО"
             value={briefText}
             onChange={(e) => setBriefText(e.target.value)}
             onKeyDown={(e) => {
@@ -581,9 +542,8 @@ function MicButton({ voice }: { voice: ReturnType<typeof useVoiceInput> }) {
 
 // ── «Понял так»: редактируемые чипы ──────────────────────────────────────────
 
-type EditableField = "taskType" | "region" | "meetingWith" | "urgency" | "detailLevel";
+type EditableField = "taskType" | "region" | "meetingWith" | "detailLevel";
 
-const urgencyOptions: UrgencyLevel[] = ["2_hours", "today", "24h", "week", "flex"];
 const detailOptions: { value: DetailLevel; label: string }[] = [
   { value: "short", label: "Коротко" },
   { value: "medium", label: "Средне" },
@@ -597,7 +557,7 @@ function RecognitionCard({
   session: SessionApi;
   regions: ReturnType<typeof useRegions>["regions"];
 }) {
-  const { form, taskType, region, regionId, urgency, detailLevel, isMeeting, selectRegion } =
+  const { form, taskType, region, regionId, detailLevel, isMeeting, selectRegion } =
     session;
   const meetingWith = form.watch("meetingWith");
   const [editing, setEditing] = useState<EditableField | null>(null);
@@ -679,34 +639,6 @@ function RecognitionCard({
               />
             </Chip>
           )}
-
-          {/* Срок */}
-          <Chip
-            label="Срок"
-            value={urgencyLabels[urgency]}
-            danger={urgency === "2_hours"}
-            open={editing === "urgency"}
-            onToggle={() => setEditing(editing === "urgency" ? null : "urgency")}
-          >
-            <div className="flex flex-col gap-1">
-              {urgencyOptions.map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => {
-                    form.setValue("urgency", value, { shouldValidate: false });
-                    setEditing(null);
-                  }}
-                  className={cn(
-                    "rounded-lg px-2.5 py-1.5 text-left text-sm transition hover:bg-muted",
-                    urgency === value && "bg-primary/10 text-primary",
-                  )}
-                >
-                  {urgencyLabels[value]}
-                </button>
-              ))}
-            </div>
-          </Chip>
 
           {/* Объём */}
           <Chip
@@ -908,54 +840,36 @@ function RegionPicker({
   );
 }
 
-// ── Вопрос уточнения ─────────────────────────────────────────────────────────
+// ── Уточняющий вопрос (динамический, от ИИ) ──────────────────────────────────
 
-const questionText: Record<QuestionKey, string> = {
-  region: "По какому региону готовим материал?",
-  meetingWith: "С кем встреча? ФИО и должность или роль.",
-  meetingGoal: "Какого результата хотите? Максимум и минимум.",
-  context: "Что уже знаете — про ЛПР, ведомство, историю со Сбером?",
-  focus: "Опишите задачу подробнее — что именно нужно подготовить.",
-};
-
-const optionalQuestions: QuestionKey[] = ["meetingGoal", "context"];
-
-function QuestionPrompt({
-  question,
-  regions,
+/**
+ * Пузырь одного контекстного уточнения. Если у вопроса есть `options` —
+ * показываем быстрые кнопки-варианты; в любом случае доступны свободный ввод,
+ * голос и «Пропустить». Ответ передаётся наверх (дописывается в фокус задачи).
+ */
+function ClarifyPrompt({
+  clarification,
   answerText,
   setAnswerText,
   voice,
   voiceBusy,
-  onRegion,
-  onMeetingWith,
-  onMeetingGoal,
-  onContext,
-  onFocus,
+  onAnswer,
   onSkip,
 }: {
-  question: QuestionKey;
-  regions: ReturnType<typeof useRegions>["regions"];
+  clarification: Clarification;
   answerText: string;
   setAnswerText: (v: string) => void;
   voice: ReturnType<typeof useVoiceInput>;
   voiceBusy: boolean;
-  onRegion: (name: string, id?: string) => void;
-  onMeetingWith: (v: string) => void;
-  onMeetingGoal: (v: string) => void;
-  onContext: (v: string) => void;
-  onFocus: (v: string) => void;
+  onAnswer: (v: string) => void;
   onSkip: () => void;
 }) {
-  const optional = optionalQuestions.includes(question);
+  const options = clarification.options ?? [];
 
   function submitText() {
     const v = answerText.trim();
     if (!v) return;
-    if (question === "meetingWith") onMeetingWith(v);
-    else if (question === "meetingGoal") onMeetingGoal(v);
-    else if (question === "context") onContext(v);
-    else if (question === "focus") onFocus(v);
+    onAnswer(v);
   }
 
   return (
@@ -963,129 +877,62 @@ function QuestionPrompt({
       <AssistantAvatar />
       <div className="w-full max-w-[85%] space-y-2.5">
         <div className="rounded-2xl rounded-tl-md border bg-card px-3.5 py-2.5 text-sm leading-relaxed">
-          {questionText[question]}
+          {clarification.question}
         </div>
 
-        {/* Регион: быстрые чипы + свободный ввод с автокомплитом */}
-        {question === "region" ? (
-          <RegionAnswer regions={regions} onPick={onRegion} />
-        ) : (
-          <div className="rounded-2xl border p-3">
-            <Textarea
-              placeholder={
-                question === "meetingWith"
-                  ? "Министр цифрового развития Татарстана"
-                  : question === "meetingGoal"
-                    ? "Максимум: протокол о пилоте. Минимум: демо и доступ к статистике."
-                    : question === "context"
-                      ? "Например: эквайринг активен, год назад отклонили единую платформу — дублирование"
-                      : taskFocusPlaceholder.meeting_preparation
+        {/* Быстрые варианты ответа, если ИИ их предложил */}
+        {options.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {options.map((opt) => (
+              <button
+                key={opt}
+                type="button"
+                onClick={() => onAnswer(opt)}
+                className="rounded-lg border bg-background px-2.5 py-1.5 text-xs font-medium transition hover:bg-muted/50"
+              >
+                {opt}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Свободный ввод + голос + пропуск */}
+        <div className="rounded-2xl border p-3">
+          <Textarea
+            placeholder={
+              options.length > 0
+                ? "Или ответьте своими словами"
+                : "Ответьте своими словами или продиктуйте"
+            }
+            value={answerText}
+            onChange={(e) => setAnswerText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                submitText();
               }
-              value={answerText}
-              onChange={(e) => setAnswerText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  submitText();
-                }
-              }}
-              rows={2}
-              className="mb-2.5 resize-none border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
-            />
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <MicButton voice={voice} />
-                {optional && (
-                  <Button type="button" variant="ghost" size="sm" onClick={onSkip} disabled={voiceBusy}>
-                    Пропустить
-                  </Button>
-                )}
-              </div>
-              <Button type="button" size="sm" disabled={!answerText.trim()} onClick={submitText}>
-                <Send className="size-3.5" /> Ответить
+            }}
+            rows={2}
+            className="mb-2.5 resize-none border-0 bg-transparent p-0 text-sm shadow-none focus-visible:ring-0"
+          />
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <MicButton voice={voice} />
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={onSkip}
+                disabled={voiceBusy}
+              >
+                Пропустить
               </Button>
             </div>
+            <Button type="button" size="sm" disabled={!answerText.trim()} onClick={submitText}>
+              <Send className="size-3.5" /> Ответить
+            </Button>
           </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/** Ответ на вопрос про регион: чипы популярных + федеральный + свободный ввод. */
-function RegionAnswer({
-  regions,
-  onPick,
-}: {
-  regions: ReturnType<typeof useRegions>["regions"];
-  onPick: (name: string, id?: string) => void;
-}) {
-  const [query, setQuery] = useState("");
-  const [open, setOpen] = useState(false);
-  const suggestions = searchRegions(query, 8);
-
-  return (
-    <div className="space-y-2.5">
-      <div className="flex flex-wrap gap-1.5">
-        {regions.map((r) => (
-          <button
-            key={r.id}
-            type="button"
-            onClick={() => onPick(r.name, r.id)}
-            className="rounded-lg border bg-background px-2.5 py-1.5 text-xs font-medium transition hover:bg-muted/50"
-          >
-            {r.name}
-          </button>
-        ))}
-        <button
-          type="button"
-          onClick={() => onPick("Федеральный уровень")}
-          className="rounded-lg border bg-background px-2.5 py-1.5 text-xs font-medium transition hover:bg-muted/50"
-        >
-          Федеральный уровень
-        </button>
-      </div>
-      <div className="relative">
-        <Input
-          placeholder="Или введите название региона"
-          value={query}
-          autoComplete="off"
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setOpen(true);
-          }}
-          onFocus={() => setOpen(true)}
-          onBlur={() => window.setTimeout(() => setOpen(false), 150)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && suggestions[0]) {
-              e.preventDefault();
-              const dbMatch = regions.find((r) => r.name === suggestions[0]);
-              onPick(suggestions[0], dbMatch?.id);
-            }
-          }}
-        />
-        {open && query.trim().length >= 1 && suggestions.length > 0 && (
-          <div className="absolute z-30 mt-1 max-h-64 w-full overflow-auto rounded-xl border bg-popover p-1 shadow-lg">
-            {suggestions.map((name) => {
-              const dbMatch = regions.find((r) => r.name === name);
-              return (
-                <button
-                  key={name}
-                  type="button"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    onPick(name, dbMatch?.id);
-                    setOpen(false);
-                  }}
-                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm transition hover:bg-muted"
-                >
-                  <MapPin className="size-3.5 shrink-0 text-muted-foreground" />
-                  <span>{name}</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
+        </div>
       </div>
     </div>
   );
