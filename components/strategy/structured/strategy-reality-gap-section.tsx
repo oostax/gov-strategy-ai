@@ -12,7 +12,7 @@ export function StrategyRealityGapSection({ gaps }: { gaps?: RegionStrategyReali
       <CardContent className="p-4">
         <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold">
           <GitCompareArrows className="size-4 text-primary" />
-          Разрыв: замысел стратегии vs факт
+          Разрыв между замыслом стратегии и фактом
         </h3>
         <div className="grid gap-3">
           {gaps.map((gap, idx) => (

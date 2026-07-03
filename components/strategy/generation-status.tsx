@@ -6,19 +6,19 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 
 const steps = [
-  { id: "storage", label: "Открываю сессию", phase: "context" },
-  { id: "playbooks", label: "Поднимаю правила", phase: "context" },
-  { id: "region_context", label: "Читаю регион и портфель Сбера", phase: "context" },
-  { id: "memory_search", label: "Проверяю память", phase: "context" },
-  { id: "web_research", label: "Ищу факты", phase: "evidence" },
-  { id: "llm_summary", label: "Формулирую решение", phase: "strategy" },
-  { id: "llm_directions", label: "Сравниваю ставки", phase: "strategy" },
-  { id: "llm_mvp", label: "Собираю пилот", phase: "strategy" },
-  { id: "llm_metrics", label: "Считаю метрики", phase: "strategy" },
-  { id: "llm_risks", label: "Проверяю риски", phase: "strategy" },
-  { id: "assemble", label: "Упаковываю brief", phase: "document" },
-  { id: "save_output", label: "Сохраняю версию", phase: "document" },
-  { id: "memory_write", label: "Запоминаю вывод", phase: "document" },
+  { id: "storage", label: "Открытие сессии", phase: "context" },
+  { id: "playbooks", label: "Загрузка правил", phase: "context" },
+  { id: "region_context", label: "Анализ региона и портфеля Сбера", phase: "context" },
+  { id: "memory_search", label: "Проверка памяти", phase: "context" },
+  { id: "web_research", label: "Поиск фактов", phase: "evidence" },
+  { id: "llm_summary", label: "Формирование решения", phase: "strategy" },
+  { id: "llm_directions", label: "Сравнение вариантов", phase: "strategy" },
+  { id: "llm_mvp", label: "Формирование пилота", phase: "strategy" },
+  { id: "llm_metrics", label: "Расчёт метрик", phase: "strategy" },
+  { id: "llm_risks", label: "Проверка рисков", phase: "strategy" },
+  { id: "assemble", label: "Формирование записки", phase: "document" },
+  { id: "save_output", label: "Сохранение версии", phase: "document" },
+  { id: "memory_write", label: "Сохранение вывода", phase: "document" },
 ];
 
 const phases = [
@@ -30,12 +30,12 @@ const phases = [
 
 function executiveMessage(step?: string, message?: string) {
   if (step === "region_context")
-    return "Беру стратегию региона и портфель Сбера — чтобы материал был релевантным";
-  if (step === "web_research") return "Ищу открытые источники, чтобы не подменять факты гипотезами";
-  if (step?.startsWith("llm_")) return "Собираю управленческую позицию: решение, доказательства, роль Сбера";
-  if (step === "assemble") return "Упаковываю материал в управленческую записку";
-  if (step === "memory_write") return "Сохраняю выводы в память агента";
-  return message || "Готовлю стратегический материал";
+    return "Учитываются стратегия региона и портфель Сбера для релевантности материала";
+  if (step === "web_research") return "Используются открытые источники вместо гипотез";
+  if (step?.startsWith("llm_")) return "Формируется управленческая позиция: решение, доказательства, роль Сбера";
+  if (step === "assemble") return "Материал оформляется в управленческую записку";
+  if (step === "memory_write") return "Выводы сохраняются в память агента";
+  return message || "Формирование стратегического материала";
 }
 
 export function GenerationStatus({ active, currentStep, message }: { active: boolean; currentStep?: string; message?: string }) {

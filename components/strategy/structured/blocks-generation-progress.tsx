@@ -14,9 +14,9 @@ interface BlockProgressData {
 }
 
 const STATUS_LABELS: Record<string, string> = {
-  pending: "Ожидает",
-  searching: "Поиск",
-  generating: "Генерация",
+  pending: "В очереди",
+  searching: "Идёт поиск",
+  generating: "Идёт генерация",
   ready: "Готово",
   failed: "Ошибка",
 };
@@ -197,7 +197,7 @@ export function BlocksGenerationProgress({
             <Sparkles className="size-4 text-primary" />
             <p className="text-xs font-semibold text-muted-foreground">Контроль качества сборки</p>
           </div>
-          <p className="text-[11px] text-muted-foreground">{runId ? "запуск принят сервером" : "ожидание планировщика"}</p>
+          <p className="text-[11px] text-muted-foreground">{runId ? "Запуск подтверждён" : "Ожидание постановки в очередь"}</p>
         </div>
 
         <div className="grid gap-px bg-border/50 sm:grid-cols-3">
@@ -213,35 +213,37 @@ export function BlocksGenerationProgress({
               <FileText className="size-3.5" />
               Источники
             </div>
-            <p className="mt-1 text-sm font-medium">{sourceStats.total || "поиск идет"}</p>
+            <p className="mt-1 text-sm font-medium">{sourceStats.total || "Идёт поиск"}</p>
           </div>
           <div className="bg-card p-3">
             <div className="flex items-center gap-2 text-[11px] font-semibold text-muted-foreground">
               <ShieldCheck className="size-3.5" />
               Проверка
             </div>
-            <p className="mt-1 text-sm font-medium">{sourceStats.verified ? `${sourceStats.verified} подтверждено` : "без неподтвержденных чисел"}</p>
+            <p className="mt-1 text-sm font-medium">{sourceStats.verified ? `${sourceStats.verified} подтверждено` : "Неподтверждённых чисел нет"}</p>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-px bg-border/50 sm:grid-cols-4">
+        <ul className="divide-y divide-border/50">
           {blocksStatus.map((block) => (
-            <div
+            <li
               key={block.kind}
-              className={`flex min-h-16 items-center gap-2 bg-card p-2.5 transition-all duration-500 ${
+              className={`flex items-center justify-between gap-3 bg-card px-3 py-2 transition-colors duration-500 ${
                 block.status === "searching" || block.status === "generating"
-                  ? "bg-primary/[0.035] shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.15)]"
+                  ? "bg-primary/[0.035]"
                   : ""
               }`}
             >
-              <StatusDot status={block.status} />
-              <div className="min-w-0">
-                <p className="text-[11px] leading-tight truncate">{BLOCK_LABELS[block.kind]}</p>
-                <p className="text-[9px] text-muted-foreground">{STATUS_LABELS[block.status]}</p>
-              </div>
-            </div>
+              <span className="flex min-w-0 items-center gap-2">
+                <StatusDot status={block.status} />
+                <span className="truncate text-xs">{BLOCK_LABELS[block.kind]}</span>
+              </span>
+              <span className="shrink-0 text-[11px] text-muted-foreground">
+                {STATUS_LABELS[block.status]}
+              </span>
+            </li>
           ))}
-        </div>
+        </ul>
       </div>
 
       {readyArr.length > 0 && (

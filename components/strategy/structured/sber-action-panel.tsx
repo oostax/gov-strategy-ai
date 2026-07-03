@@ -12,7 +12,7 @@ export function SberActionPanel({ actions }: { actions: SberAction[] }) {
       <CardContent className="p-4">
         <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold">
           <BriefcaseBusiness className="size-4 text-primary" />
-          Где Сбер реально участвует
+          Участие Сбера
         </h3>
         <div className="grid gap-3 lg:grid-cols-2">
           {actions.slice(0, 4).map((action, idx) => (

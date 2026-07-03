@@ -49,7 +49,7 @@ export function SessionFocusBar({
       id={id}
       className="static rounded-2xl border bg-card p-3 shadow-sm"
     >
-      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,520px)] lg:items-start">
         <div className="min-w-0">
           <div className="mb-2 flex flex-wrap items-center gap-1.5">
             <Badge variant="secondary">{taskLabels[session.taskType]}</Badge>
@@ -75,7 +75,7 @@ export function SessionFocusBar({
           )}
         </div>
 
-        <div className="flex gap-1.5 overflow-x-auto lg:max-w-md lg:justify-end">
+        <div className="flex flex-wrap gap-1.5 lg:justify-end">
           {sections.map((section) => (
             <a
               key={section.href}

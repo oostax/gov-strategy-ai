@@ -37,7 +37,7 @@ export default async function PlaybooksPage() {
           {playbooks.map((playbook) => (
             <Link key={playbook.id} href={`/playbooks/${playbook.slug}`}>
               <Card className="h-full rounded-2xl transition hover:shadow-md">
-                <CardContent className="p-4">
+                <CardContent className="flex h-full flex-col p-4">
                   <div className="mb-3 flex items-start justify-between gap-2">
                     <div className="flex items-center gap-2">
                       <span className="flex size-8 items-center justify-center rounded-lg bg-muted">
@@ -79,7 +79,7 @@ export default async function PlaybooksPage() {
 
                   {/* Footer */}
                   {playbook.history.length > 1 && (
-                    <div className="mt-3 flex items-center justify-between gap-1.5 border-t pt-2 text-[10px] text-muted-foreground">
+                    <div className="mt-auto flex items-center justify-between gap-1.5 border-t pt-2 text-[10px] text-muted-foreground">
                       <span className="flex items-center gap-1.5">
                         <History className="size-3" />
                         {new Date(playbook.history[0]?.createdAt ?? playbook.updatedAt).toLocaleDateString("ru-RU", {

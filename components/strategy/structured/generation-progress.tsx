@@ -1,19 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { CircleDashed, Loader2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 
 const steps = [
-  { label: "Загружаю контекст", duration: 3 },
-  { label: "Читаю стратегию региона", duration: 5 },
-  { label: "Подбираю правила", duration: 3 },
-  { label: "Ищу свежие источники", duration: 18 },
-  { label: "Собираю доказательную базу", duration: 12 },
-  { label: "Генерирую материал", duration: 55 },
-  { label: "Проверяю как руководитель", duration: 18 },
-  { label: "Убираю воду и гипотезы", duration: 10 },
+  { label: "Загрузка контекста", duration: 3 },
+  { label: "Анализ стратегии региона", duration: 5 },
+  { label: "Подбор правил", duration: 3 },
+  { label: "Поиск источников", duration: 18 },
+  { label: "Сбор доказательной базы", duration: 12 },
+  { label: "Формирование материала", duration: 55 },
+  { label: "Контрольная проверка", duration: 18 },
+  { label: "Финальное форматирование", duration: 10 },
 ];
 
 export function GenerationProgress({ active }: { active: boolean }) {
@@ -55,14 +55,14 @@ export function GenerationProgress({ active }: { active: boolean }) {
   return (
     <Card className="animate-in fade-in slide-in-from-top-2 overflow-hidden rounded-2xl border-primary/10">
       <CardContent className="p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Loader2 className="size-4 animate-spin text-primary" />
-            <span className="text-sm font-semibold">
-              {steps[currentStep]?.label ?? "Генерирую..."}
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
+            <span className="truncate text-sm font-semibold">
+              {steps[currentStep]?.label ?? "Формирование материала"}
             </span>
           </div>
-          <span className="rounded-full bg-muted px-2.5 py-0.5 text-xs tabular-nums text-muted-foreground">
+          <span className="shrink-0 rounded-full bg-muted px-2.5 py-0.5 text-xs tabular-nums text-muted-foreground">
             {elapsed} сек
           </span>
         </div>
@@ -75,22 +75,44 @@ export function GenerationProgress({ active }: { active: boolean }) {
           />
         </div>
 
-        {/* Step indicators */}
-        <div className="flex gap-1">
-          {steps.map((step, idx) => (
-            <div
-              key={step.label}
-              className={cn(
-                "h-1 flex-1 rounded-full transition-colors duration-500",
-                idx < currentStep
-                  ? "bg-primary"
-                  : idx === currentStep
-                    ? "bg-primary/50 animate-pulse"
-                    : "bg-muted",
-              )}
-            />
-          ))}
-        </div>
+        {/* Step list */}
+        <ul className="space-y-1.5">
+          {steps.map((step, idx) => {
+            const status = idx < currentStep ? "done" : idx === currentStep ? "active" : "queued";
+            return (
+              <li
+                key={step.label}
+                className="flex items-center justify-between gap-3 rounded-lg px-2 py-1"
+              >
+                <span
+                  className={cn(
+                    "truncate text-xs",
+                    status === "queued" ? "text-muted-foreground" : "text-foreground font-medium",
+                  )}
+                >
+                  {step.label}
+                </span>
+                <span className="flex shrink-0 items-center gap-1.5 text-[11px]">
+                  {status === "done" && (
+                    <span className="inline-flex items-center gap-1 text-emerald-600">
+                      <span className="size-1.5 rounded-full bg-emerald-500" /> Готово
+                    </span>
+                  )}
+                  {status === "active" && (
+                    <span className="inline-flex items-center gap-1 text-primary">
+                      <Loader2 className="size-3 animate-spin" /> Идёт
+                    </span>
+                  )}
+                  {status === "queued" && (
+                    <span className="inline-flex items-center gap-1 text-muted-foreground">
+                      <CircleDashed className="size-3" /> В очереди
+                    </span>
+                  )}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
       </CardContent>
     </Card>
   );

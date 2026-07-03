@@ -23,7 +23,7 @@ export function TrustPanel({ output, session }: { output: AgentOutput | null; se
             <Badge variant="outline">{session.region || "регион не указан"}</Badge>
           </div>
           <p className="mt-2 text-muted-foreground">
-            Backend ищет открытые источники и показывает их в карточке результата. Если источников мало, факты остаются гипотезами до проверки.
+            Система использует открытые источники и указывает их в карточке результата. При недостатке источников факты остаются гипотезами до проверки.
           </p>
         </div>
         <div className="rounded-2xl border p-3">

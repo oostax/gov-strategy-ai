@@ -544,7 +544,7 @@ function RealityGapSection({ gaps }: { gaps: NonNullable<RegionAnalysisOutput["s
             <GitCompareArrows className="size-4" />
           </span>
           <div className="min-w-0">
-            <h3 className="text-sm font-semibold leading-tight">Стратегия vs факт</h3>
+            <h3 className="text-sm font-semibold leading-tight">Стратегия и факт</h3>
             <p className="text-[11px] leading-tight text-muted-foreground">
               Где замысел расходится с реальностью
             </p>

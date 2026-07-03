@@ -14,6 +14,20 @@ type CacheStatus = {
   blockCount: number;
 };
 
+const BLOCK_LABELS: Record<string, string> = {
+  summary: "Общая справка",
+  budget: "Бюджет",
+  industries: "Отрасли",
+  priorities: "Приоритеты",
+  scenarios: "Сценарии",
+  competition: "Конкурентная среда",
+  stakeholders: "Руководители",
+};
+
+function blockLabel(key: string): string {
+  return BLOCK_LABELS[key] ?? key;
+}
+
 export function RegionCacheStatus({ regionId }: { regionId: string }) {
   const [status, setStatus] = useState<CacheStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -64,11 +78,15 @@ export function RegionCacheStatus({ regionId }: { regionId: string }) {
     <div className="flex items-center gap-2">
       <Badge variant={fresh ? "secondary" : "outline"} className="text-[10px]">
         <Database className="mr-1 size-3" />
-        {fresh ? `Кэш свежий${age !== null ? ` (${age}д)` : ""}` : status?.exists ? "Кэш устарел" : "Нет кэша"}
+        {fresh
+          ? `Данные актуальны${age !== null ? ` (${age} дн. назад)` : ""}`
+          : status?.exists
+            ? "Данные требуют обновления"
+            : "Данные не собраны"}
       </Badge>
       {status && !fresh && status.staleBlocks.length > 0 && (
         <span className="text-[10px] text-muted-foreground">
-          устарели: {status.staleBlocks.join(", ")}
+          требуют обновления: {status.staleBlocks.map(blockLabel).join(", ")}
         </span>
       )}
       <Button variant="ghost" size="sm" onClick={refresh} disabled={refreshing}>

@@ -121,9 +121,9 @@ export function SessionToolbar({
 
   return (
     <div className="rounded-2xl border bg-card px-4 py-3">
-      <div className="flex items-center gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         {editing ? (
-          <div className="flex min-w-0 flex-1 gap-2">
+          <div className="flex min-w-0 flex-1 flex-wrap gap-2">
             <Input value={title} onChange={(event) => setTitle(event.target.value)} />
             <Button disabled={busy} onClick={rename}>
               Сохранить
@@ -134,7 +134,7 @@ export function SessionToolbar({
           </div>
         ) : (
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-base font-semibold tracking-tight">
+            <h2 className="text-base font-semibold leading-snug tracking-tight sm:truncate">
               {getSessionTitle(session)}
             </h2>
             <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
@@ -144,7 +144,7 @@ export function SessionToolbar({
           </div>
         )}
 
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 items-center gap-1 self-end sm:self-auto">
           <IconLink href="/" label="На главную" icon={Home} />
           <IconLink href="/sessions" label="Список сессий" icon={List} />
 

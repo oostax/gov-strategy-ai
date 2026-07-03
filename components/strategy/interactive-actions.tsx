@@ -27,7 +27,7 @@ export function InteractiveActions({ disabled, loading, onAction }: { disabled: 
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <WandSparkles className="size-4" />
-            <p className="font-semibold">Пульт агента</p>
+            <p className="font-semibold">Действия с материалом</p>
           </div>
           <Badge variant="secondary">{actions.length} действий</Badge>
         </div>
@@ -37,7 +37,7 @@ export function InteractiveActions({ disabled, loading, onAction }: { disabled: 
           ))}
         </div>
         <Button type="button" variant="ghost" size="sm" className="h-8 w-full justify-between rounded-xl px-2" onClick={() => setOpen((value) => !value)}>
-          Еще действия
+          Ещё действия
           {open ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
         </Button>
         {open && (
