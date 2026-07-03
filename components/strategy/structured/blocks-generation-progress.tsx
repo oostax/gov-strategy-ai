@@ -2,12 +2,19 @@
 
 import { useEffect, useState, useRef } from "react";
 import { Sparkles, Timer, Search, Brain, CheckCircle2, Clock, ShieldCheck, FileText, Layers3, Radar } from "lucide-react";
-import { BLOCK_LABELS, BLOCK_ORDER, type BlockKind, type BlockStatus } from "@/lib/agents/region-blocks/types";
-import type { RegionAnalysisOutput, TypedOutput } from "@/lib/schemas/structured-output";
+import { BLOCK_LABELS, BLOCK_ORDER, type BlockStatus } from "@/lib/agents/region-blocks/types";
+import { MEETING_BLOCK_LABELS, MEETING_BLOCK_ORDER } from "@/lib/agents/meeting-blocks/types";
+import type {
+  MeetingOutput,
+  RegionAnalysisOutput,
+  TypedOutput,
+} from "@/lib/schemas/structured-output";
+import type { TaskType } from "@/lib/schemas/session";
 import { BlockSummary, BlockIndustries, BlockBudget, BlockScenarios, BlockPriorities } from "./reveal-blocks";
 
+// Блок в прогрессе описывается только строковым kind (домен встречи или региона).
 interface BlockProgressData {
-  kind: BlockKind;
+  kind: string;
   status: BlockStatus;
   label: string;
   data: Record<string, unknown> | null;
@@ -21,6 +28,8 @@ const STATUS_LABELS: Record<string, string> = {
   failed: "Ошибка",
 };
 
+const MEETING_TASKS: TaskType[] = ["meeting_preparation", "meeting_followup"];
+
 function StatusDot({ status }: { status: string }) {
   if (status === "ready") return <CheckCircle2 className="size-3.5 text-emerald-500" />;
   if (status === "searching") return <Search className="size-3.5 animate-pulse text-blue-500" />;
@@ -32,16 +41,28 @@ function StatusDot({ status }: { status: string }) {
 export function BlocksGenerationProgress({
   sessionId,
   runId,
+  taskType,
   onComplete,
   onError,
 }: {
   sessionId: string;
   runId?: string;
+  taskType?: TaskType;
   onComplete: (output: TypedOutput) => void;
   onError: (error: string) => void;
 }) {
+  const isMeeting = taskType ? MEETING_TASKS.includes(taskType) : false;
+  const defaultOrder: string[] = isMeeting ? [...MEETING_BLOCK_ORDER] : [...BLOCK_ORDER];
+  const defaultLabels: Record<string, string> = isMeeting ? MEETING_BLOCK_LABELS : BLOCK_LABELS;
+  const domainTitle = isMeeting ? "Генерация материала встречи" : "Генерация регионального анализа";
+
   const [blocksStatus, setBlocksStatus] = useState<BlockProgressData[]>(
-    BLOCK_ORDER.map((k) => ({ kind: k, status: "pending" as BlockStatus, label: BLOCK_LABELS[k], data: null })),
+    defaultOrder.map((k) => ({
+      kind: k,
+      status: "pending" as BlockStatus,
+      label: defaultLabels[k] ?? k,
+      data: null,
+    })),
   );
   const [elapsed, setElapsed] = useState(0);
   const [readyData, setReadyData] = useState<Record<string, Record<string, unknown>>>({});
@@ -50,10 +71,20 @@ export function BlocksGenerationProgress({
   useEffect(() => {
     pollingRef.current = true;
     const startTime = Date.now();
-    setReadyData({});
-    setBlocksStatus(
-      BLOCK_ORDER.map((k) => ({ kind: k, status: "pending" as BlockStatus, label: BLOCK_LABELS[k], data: null })),
-    );
+    // Сброс к чистому состоянию при смене прогона — вне синхронного тела эффекта,
+    // чтобы не провоцировать каскадные рендеры (react-hooks/set-state-in-effect).
+    queueMicrotask(() => {
+      if (!pollingRef.current) return;
+      setReadyData({});
+      setBlocksStatus(
+        defaultOrder.map((k) => ({
+          kind: k,
+          status: "pending" as BlockStatus,
+          label: defaultLabels[k] ?? k,
+          data: null,
+        })),
+      );
+    });
 
     if (!runId) {
       const timer = window.setInterval(() => {
@@ -84,7 +115,7 @@ export function BlocksGenerationProgress({
           }
 
           if (d.blocks) {
-            const updated = (d.blocks as BlockProgressData[]);
+            const updated = d.blocks as BlockProgressData[];
             setBlocksStatus(updated);
             setReadyData((prev) => {
               const next = { ...prev };
@@ -104,13 +135,26 @@ export function BlocksGenerationProgress({
     }
 
     poll();
-    return () => { pollingRef.current = false; };
+    return () => {
+      pollingRef.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, runId, onComplete, onError]);
 
-  const readyArr = BLOCK_ORDER.filter((k) => readyData[k]);
+  // Порядок готовых блоков — по фактическому плану (blocksStatus), не по дефолту.
+  const planKinds = blocksStatus.map((b) => b.kind);
+  const totalBlocks = planKinds.length || defaultOrder.length;
+  const readyArr = planKinds.filter((k) => readyData[k]);
   const readyCount = readyArr.length;
-  const activeCount = blocksStatus.filter((block) => block.status === "searching" || block.status === "generating").length;
-  const visualProgress = Math.min(98, Math.round(((readyCount + activeCount * 0.45) / BLOCK_ORDER.length) * 100));
+  const labelFor = (kind: string) =>
+    blocksStatus.find((b) => b.kind === kind)?.label ?? defaultLabels[kind] ?? kind;
+  const activeCount = blocksStatus.filter(
+    (block) => block.status === "searching" || block.status === "generating",
+  ).length;
+  const visualProgress = Math.min(
+    98,
+    Math.round(((readyCount + activeCount * 0.45) / totalBlocks) * 100),
+  );
   const sourceStats = Object.values(readyData).reduce<{ total: number; verified: number }>(
     (acc, block) => {
       const sources = Array.isArray(block.sources) ? block.sources : [];
@@ -125,10 +169,10 @@ export function BlocksGenerationProgress({
   );
   const activeBlocks = blocksStatus
     .filter((block) => block.status === "searching" || block.status === "generating")
-    .map((block) => BLOCK_LABELS[block.kind]);
+    .map((block) => labelFor(block.kind));
   const activeLabel = activeBlocks.length
     ? activeBlocks.join(", ")
-    : readyCount === BLOCK_ORDER.length
+    : readyCount === totalBlocks
       ? "Финальная сборка материала"
       : runId
         ? "Подготовка контура поиска"
@@ -138,7 +182,7 @@ export function BlocksGenerationProgress({
     { label: "План", active: !runId || blocksStatus.some((b) => b.status !== "pending"), done: Boolean(runId) },
     { label: "Поиск", active: blocksStatus.some((b) => b.status === "searching"), done: readyCount > 0 },
     { label: "Факты", active: blocksStatus.some((b) => b.status === "generating"), done: readyCount >= 3 },
-    { label: "Сборка", active: readyCount >= BLOCK_ORDER.length - 1, done: readyCount === BLOCK_ORDER.length },
+    { label: "Сборка", active: readyCount >= totalBlocks - 1, done: readyCount === totalBlocks },
   ];
 
   return (
@@ -154,7 +198,7 @@ export function BlocksGenerationProgress({
                 <span className="absolute inset-0 rounded-xl border border-primary/40 animate-ping" />
               </div>
               <div>
-                <p className="text-sm font-semibold">Генерация регионального анализа</p>
+                <p className="text-sm font-semibold">{domainTitle}</p>
                 <p className="mt-1 text-xs text-muted-foreground">{activeLabel}</p>
               </div>
             </div>
@@ -163,7 +207,7 @@ export function BlocksGenerationProgress({
                 <Timer className="size-3" />
                 {Math.floor(elapsed / 60)}:{Math.floor(elapsed % 60).toString().padStart(2, "0")}
               </span>
-              <p className="mt-1 font-medium text-foreground">{readyCount}/{BLOCK_ORDER.length} блоков</p>
+              <p className="mt-1 font-medium text-foreground">{readyCount}/{totalBlocks} блоков</p>
             </div>
           </div>
 
@@ -236,7 +280,7 @@ export function BlocksGenerationProgress({
             >
               <span className="flex min-w-0 items-center gap-2">
                 <StatusDot status={block.status} />
-                <span className="truncate text-xs">{BLOCK_LABELS[block.kind]}</span>
+                <span className="truncate text-xs">{labelFor(block.kind)}</span>
               </span>
               <span className="shrink-0 text-[11px] text-muted-foreground">
                 {STATUS_LABELS[block.status]}
@@ -251,14 +295,18 @@ export function BlocksGenerationProgress({
           {readyArr.map((kind) => {
             const data = readyData[kind];
             if (!data) return null;
+            const content = isMeeting
+              ? renderMeetingBlockContent(kind, data)
+              : renderRegionBlockContent(kind, data);
+            if (!content) return null;
             return (
               <div key={kind}>
                 <div className="flex items-center gap-2 mb-1.5">
                   <CheckCircle2 className="size-3.5 text-emerald-500" />
-                  <p className="text-xs font-semibold">{BLOCK_LABELS[kind]}</p>
+                  <p className="text-xs font-semibold">{labelFor(kind)}</p>
                 </div>
                 <div className="rounded-xl border bg-card p-3 animate-in fade-in slide-in-from-bottom-2 duration-500">
-                  {renderBlockContent(kind, data)}
+                  {content}
                 </div>
               </div>
             );
@@ -269,7 +317,7 @@ export function BlocksGenerationProgress({
   );
 }
 
-function renderBlockContent(kind: BlockKind, data: Record<string, unknown>): React.ReactNode {
+function renderRegionBlockContent(kind: string, data: Record<string, unknown>): React.ReactNode {
   const typed = data as Partial<RegionAnalysisOutput>;
   switch (kind) {
     case "summary":
@@ -311,6 +359,123 @@ function renderBlockContent(kind: BlockKind, data: Record<string, unknown>): Rea
               <p className="text-muted-foreground">{s.role}{s.department ? ` · ${s.department}` : ""}</p>
               {s.achievements && <p className="mt-0.5 text-[10px]">{s.achievements}</p>}
             </div>
+          ))}
+        </div>
+      );
+    }
+    default:
+      return null;
+  }
+}
+
+// Краткое превью meeting-блоков по мере готовности (реалтайм «блоки заполняются»).
+function renderMeetingBlockContent(kind: string, data: Record<string, unknown>): React.ReactNode {
+  const nonEmpty = (v: unknown): v is string => typeof v === "string" && v.trim().length > 0;
+  switch (kind) {
+    case "ministry": {
+      const portrait = (data.ministryPortrait ?? {}) as MeetingOutput["ministryPortrait"];
+      const stats = portrait?.stats ?? [];
+      const bw = portrait?.budgetWindow;
+      return (
+        <div className="space-y-2">
+          {bw && nonEmpty(bw.tension) && (
+            <p className="text-xs text-muted-foreground">{bw.tension}</p>
+          )}
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            {stats.slice(0, 4).map((s, i) => (
+              <div key={s.id || i} className="rounded-lg border p-2 text-xs">
+                <p className="font-semibold">{s.value}</p>
+                <p className="text-[10px] text-muted-foreground">{s.label}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    }
+    case "dossier": {
+      const d = (data.lprDossier ?? {}) as MeetingOutput["lprDossier"];
+      return (
+        <div className="space-y-1 text-xs">
+          {nonEmpty(d?.name) && <p className="font-medium">{d?.name}</p>}
+          {nonEmpty(d?.role) && <p className="text-muted-foreground">{d?.role}</p>}
+          {d?.known?.text && <p className="mt-1 text-[11px]">{d.known.text}</p>}
+        </div>
+      );
+    }
+    case "participants": {
+      const list = (data.participants ?? []) as NonNullable<MeetingOutput["participants"]>;
+      return (
+        <div className="space-y-1.5">
+          {list.slice(0, 4).map((p, i) => (
+            <div key={p.id || i} className="rounded-lg border p-2 text-xs">
+              <p className="font-medium">{nonEmpty(p.name) ? p.name : p.role}</p>
+              <p className="text-[10px] text-muted-foreground">{p.whatMatters}</p>
+            </div>
+          ))}
+        </div>
+      );
+    }
+    case "theses": {
+      const list = (data.theses ?? []) as NonNullable<MeetingOutput["theses"]>;
+      return (
+        <ul className="space-y-1 text-xs">
+          {list.slice(0, 4).map((t, i) => (
+            <li key={t.id || i} className="flex gap-1.5">
+              <span className="mt-1.5 size-1 shrink-0 rounded-full bg-primary/50" />
+              <span>{t.text}</span>
+            </li>
+          ))}
+        </ul>
+      );
+    }
+    case "objections": {
+      const list = (data.objections ?? []) as NonNullable<MeetingOutput["objections"]>;
+      return (
+        <div className="space-y-1.5">
+          {list.slice(0, 4).map((o, i) => (
+            <div key={o.id || i} className="rounded-lg border p-2 text-xs">
+              <p className="font-medium text-rose-600 dark:text-rose-400">«{o.objection}»</p>
+              {nonEmpty(o.response) && <p className="mt-0.5 text-[11px] text-muted-foreground">{o.response}</p>}
+            </div>
+          ))}
+        </div>
+      );
+    }
+    case "sber": {
+      const list = (data.sberActions ?? []) as NonNullable<MeetingOutput["sberActions"]>;
+      return (
+        <div className="space-y-1.5">
+          {list.slice(0, 3).map((a, i) => (
+            <div key={a.id || i} className="rounded-lg border p-2 text-xs">
+              <p className="font-medium">{a.asset}</p>
+              {nonEmpty(a.firstTwoWeeks) && <p className="text-[10px] text-muted-foreground">{a.firstTwoWeeks}</p>}
+            </div>
+          ))}
+        </div>
+      );
+    }
+    case "agenda": {
+      const list = (data.agenda ?? []) as MeetingOutput["agenda"];
+      return (
+        <div className="space-y-1 text-xs">
+          {list.slice(0, 5).map((a, i) => (
+            <div key={a.id || i} className="flex gap-2">
+              <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{a.time}</span>
+              <span className="truncate">{a.topic}</span>
+            </div>
+          ))}
+        </div>
+      );
+    }
+    case "after": {
+      const first48h = ((data.afterMeeting as MeetingOutput["afterMeeting"])?.first48h ?? []) as NonNullable<MeetingOutput["ifYes"]>;
+      return (
+        <div className="space-y-1 text-xs">
+          {first48h.slice(0, 3).map((s, i) => (
+            <p key={s.id || i} className="flex gap-1.5">
+              <span className="mt-1.5 size-1 shrink-0 rounded-full bg-primary/50" />
+              <span>{s.action}</span>
+            </p>
           ))}
         </div>
       );

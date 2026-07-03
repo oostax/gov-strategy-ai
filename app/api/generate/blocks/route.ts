@@ -3,6 +3,8 @@ import { promises as fs } from "fs";
 import { generateRequestSchema } from "@/lib/schemas/agent";
 import { getStorage } from "@/lib/storage/local-json-storage";
 import { startBlocksGeneration } from "@/lib/agents/region-blocks/orchestrator";
+import { startMeetingBlocks } from "@/lib/agents/meeting-blocks/orchestrator";
+import { runMeetingSingleShotFallback } from "@/lib/agents/meeting-blocks/fallback";
 import {
   structuredErrorPath,
   structuredOutputPath,
@@ -10,9 +12,17 @@ import {
 } from "@/lib/agents/region-blocks/storage";
 import { logBlockEvent } from "@/lib/agents/region-blocks/logger";
 import { canonicalRegionName } from "@/lib/data/region-normalization";
+import type { TaskType } from "@/lib/schemas/session";
 
 export const runtime = "nodejs";
 export const maxDuration = 600;
+
+const REGION_TASKS: TaskType[] = ["region_strategy", "sber_region_strategy"];
+const MEETING_TASKS: TaskType[] = ["meeting_preparation", "meeting_followup"];
+
+function supportsBlocks(taskType: TaskType): boolean {
+  return REGION_TASKS.includes(taskType) || MEETING_TASKS.includes(taskType);
+}
 
 const SAFE_ID = /^[a-zA-Z0-9_-]+$/;
 
@@ -63,12 +73,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Session not found" }, { status: 404 });
     }
 
-    if (
-      details.session.taskType !== "region_strategy" &&
-      details.session.taskType !== "sber_region_strategy"
-    ) {
+    const taskType = details.session.taskType;
+    if (!supportsBlocks(taskType)) {
       return NextResponse.json(
-        { error: "Block generation is available only for region sessions" },
+        { error: "Block generation is available only for region and meeting sessions" },
         { status: 400 },
       );
     }
@@ -78,16 +86,22 @@ export async function POST(request: Request) {
       fs.unlink(structuredErrorPath(input.sessionId)).catch(() => undefined),
       fs.unlink(structuredOutputPath(input.sessionId)).catch(() => undefined),
     ]);
-    const { run, promise } = await startBlocksGeneration(details.session, region, input.prompt ?? "");
+
+    // Диспетчеризация по домену задачи: meeting_* → многоблочная встреча,
+    // region_* → многоблочный регион. API один — оркестраторы разные.
+    const isMeeting = MEETING_TASKS.includes(taskType);
+    const { run, promise } = isMeeting
+      ? await startMeetingBlocks(details.session, region, input.prompt ?? "")
+      : await startBlocksGeneration(details.session, region, input.prompt ?? "");
     await logBlockEvent({
       sessionId: input.sessionId,
       runId: run.runId,
       scope: "blocks.api",
       message: "post_started_run",
-      data: { runId: run.runId, region: region?.name || details.session.region || "" },
+      data: { runId: run.runId, domain: isMeeting ? "meeting" : "region", region: region?.name || details.session.region || "" },
     });
 
-    promise.catch((err) => {
+    promise.catch(async (err) => {
       console.error(`[blocks] Generation error for ${input.sessionId}:`, err);
       logBlockEvent({
         sessionId: input.sessionId,
@@ -96,10 +110,26 @@ export async function POST(request: Request) {
         message: "background_failed",
         data: { error: err instanceof Error ? err.message : String(err) },
       }).catch(() => {});
+      // Безопасность: для встречи при полном сбое блоков — фолбэк на одноходовую
+      // генерацию, чтобы не оставить пользователя без результата.
+      if (isMeeting) {
+        try {
+          await runMeetingSingleShotFallback(details.session, region, input.prompt ?? "");
+          await logBlockEvent({
+            sessionId: input.sessionId,
+            runId: run.runId,
+            scope: "blocks.api",
+            message: "meeting_fallback_ok",
+          });
+          return;
+        } catch (fallbackErr) {
+          console.error(`[blocks] Meeting single-shot fallback failed for ${input.sessionId}:`, fallbackErr);
+        }
+      }
       writeStructuredError(input.sessionId, {
-          error: "Generation failed",
-          message: err instanceof Error ? err.message : String(err),
-          at: new Date().toISOString(),
+        error: "Generation failed",
+        message: err instanceof Error ? err.message : String(err),
+        at: new Date().toISOString(),
       }).catch(() => {});
     });
 

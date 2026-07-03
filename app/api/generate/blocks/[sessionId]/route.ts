@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { promises as fs } from "fs";
 import { getBlocksState } from "@/lib/agents/region-blocks/orchestrator";
+import { getMeetingBlocksState } from "@/lib/agents/meeting-blocks/orchestrator";
 import { BLOCK_LABELS, BLOCK_ORDER } from "@/lib/agents/region-blocks/types";
+import { MEETING_BLOCK_LABELS, MEETING_BLOCK_ORDER } from "@/lib/agents/meeting-blocks/types";
+import { readMeetingRun } from "@/lib/agents/meeting-blocks/storage";
 import {
   structuredErrorPath,
   structuredOutputPath,
@@ -13,6 +16,38 @@ const SAFE_ID = /^[a-zA-Z0-9_-]+$/;
 
 function validateId(id: string): boolean {
   return SAFE_ID.test(id) && id.length <= 64;
+}
+
+const MEETING_TASKS = new Set(["meeting_preparation", "meeting_followup"]);
+
+/**
+ * Универсальная выборка состояния прогона по домену. Раннеры региона и встречи
+ * пишут state.json в один корень; различаем по taskType прогона и берём
+ * labels/order из соответствующего реестра. Прогресс считается по реально
+ * запланированным блокам.
+ */
+async function loadDomainState(sessionId: string, runId?: string) {
+  // Сначала пробуем определить домен по taskType прогона (state.json общий).
+  const meetingRun = await readMeetingRun(sessionId, runId).catch(() => null);
+  const isMeeting = meetingRun ? MEETING_TASKS.has(meetingRun.taskType) : false;
+
+  if (isMeeting) {
+    const state = await getMeetingBlocksState(sessionId, runId);
+    if (!state) return null;
+    return {
+      state,
+      labels: MEETING_BLOCK_LABELS as Record<string, string>,
+      defaultOrder: MEETING_BLOCK_ORDER as readonly string[],
+    };
+  }
+
+  const state = await getBlocksState(sessionId, runId);
+  if (!state) return null;
+  return {
+    state,
+    labels: BLOCK_LABELS as Record<string, string>,
+    defaultOrder: BLOCK_ORDER as readonly string[],
+  };
 }
 
 export async function GET(
@@ -28,20 +63,20 @@ export async function GET(
     const url = new URL(request.url);
     const runId = url.searchParams.get("runId") || undefined;
 
-    const state = await getBlocksState(sessionId, runId);
-    if (state) {
-      // Адаптивная композиция: показываем прогресс по реально запланированным блокам,
-      // а не по всем возможным — иначе прогресс не дойдёт до 100%.
-      const plannedKinds = state.plan?.blocks?.length
+    const domain = await loadDomainState(sessionId, runId);
+    if (domain) {
+      const { state, labels, defaultOrder } = domain;
+      // Показываем прогресс по реально запланированным блокам, а не по всем возможным.
+      const plannedKinds: string[] = state.plan?.blocks?.length
         ? state.plan.blocks.map((b) => b.kind)
-        : BLOCK_ORDER;
+        : [...defaultOrder];
       const blocks = plannedKinds.map((kind) => {
         const bs = state.blocks.find((b) => b.kind === kind);
         const ready = state.readyBlocks.find((r) => r.kind === kind);
         return {
           kind,
           status: bs?.status || "pending",
-          label: BLOCK_LABELS[kind],
+          label: labels[kind] ?? kind,
           data: ready?.data || null,
           error: bs?.error,
         };
@@ -89,15 +124,17 @@ export async function GET(
         blocks,
         progress: {
           step: `block_${readyCount}_of_${total}`,
-          message: readyCount > 0
-            ? `Сгенерировано ${readyCount} из ${total} блоков`
-            : "Запуск генерации блоков...",
-          percent: Math.round((readyCount / total) * 100),
+          message:
+            readyCount > 0
+              ? `Сгенерировано ${readyCount} из ${total} блоков`
+              : "Запуск генерации блоков...",
+          percent: total > 0 ? Math.round((readyCount / total) * 100) : 0,
           elapsed: 0,
         },
       });
     }
 
+    // Прогона нет в state — но результат/ошибка могли быть записаны (в т.ч. фолбэком).
     try {
       const fullResult = await fs.readFile(structuredOutputPath(sessionId), "utf8");
       return NextResponse.json({
@@ -126,7 +163,7 @@ export async function GET(
         elapsed: 0,
       },
     });
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { error: "Failed to check generation status" },
       { status: 500 },

@@ -38,7 +38,9 @@ export default function SessionPage() {
         if (data.session) {
           setSession(data.session);
           const isRegion = data.session.taskType === "region_strategy" || data.session.taskType === "sber_region_strategy";
-          setUseBlocks(isRegion);
+          const isMeeting = data.session.taskType === "meeting_preparation" || data.session.taskType === "meeting_followup";
+          // Многоблочный путь: регион и встреча. Остальные типы — одноходовые.
+          setUseBlocks(isRegion || isMeeting);
         }
         if (data.structuredOutput) {
           setOutput(data.structuredOutput);
@@ -88,7 +90,7 @@ export default function SessionPage() {
     setBlocksActive(false);
     setBlockRunId(null);
     setLoading(false);
-    toast.success("Региональный анализ сформирован");
+    toast.success(result.kind === "meeting" ? "Материал встречи сформирован" : "Региональный анализ сформирован");
   }, []);
 
   const handleBlocksError = useCallback((error: string) => {
@@ -221,6 +223,7 @@ export default function SessionPage() {
           <BlocksGenerationProgress
             sessionId={sessionId}
             runId={blockRunId ?? undefined}
+            taskType={session?.taskType}
             onComplete={handleBlocksComplete}
             onError={handleBlocksError}
           />
@@ -228,9 +231,9 @@ export default function SessionPage() {
           <GenerationProgress active={loading} />
         )}
 
-        {output && !loading && (
+        {output && !loading && useBlocks && (
           <div className="flex items-center justify-between gap-3 rounded-2xl border bg-card px-4 py-3">
-            <p className="text-sm text-muted-foreground">Анализ собран блоками: поиск, факты, сценарии, проверка источников</p>
+            <p className="text-sm text-muted-foreground">Материал собран блоками: поиск, факты, проверка источников</p>
             <Button variant="outline" size="sm" onClick={() => generate()} disabled={loading}>
               <RefreshCw className="size-3.5" /> Сформировать заново
             </Button>
@@ -261,7 +264,7 @@ export default function SessionPage() {
               <p className="text-sm font-semibold">Формирование материала...</p>
               <p className="mt-1 text-xs text-muted-foreground">
                 {useBlocks
-                  ? "Региональный анализ собирается блоками: бюджет, отрасли, приоритеты, сценарии, руководители, поставщики"
+                  ? "Материал собирается блоками: поиск, факты, проверка источников по каждой секции"
                   : "Если генерация не началась автоматически:"}
               </p>
               <Button className="mt-3" onClick={() => generate()}>
