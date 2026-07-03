@@ -3,6 +3,16 @@ import { promises as fs } from "fs";
 import { buildDocx } from "@/lib/export/docx";
 import { buildPptx } from "@/lib/export/pptx";
 import { buildRegionPdf, toRegionAgentOutput } from "@/lib/export/region-export";
+import {
+  buildDocModel,
+  docTitleFor,
+  supportsStructuredDoc,
+} from "@/lib/export/structured-doc";
+import {
+  buildStructuredDocx,
+  buildStructuredPdf,
+  buildStructuredPptx,
+} from "@/lib/export/structured-render";
 import { roleLabels, taskLabels } from "@/lib/schemas/session";
 import type { TypedOutput } from "@/lib/schemas/structured-output";
 import { structuredOutputPath } from "@/lib/agents/region-blocks/storage";
@@ -64,51 +74,68 @@ export async function GET(request: Request) {
       details.session.title?.trim() || latest?.title || "strategy",
     ) || "strategy";
 
+    const pdfHeaders = (name: string) => ({
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `attachment; filename="${name}.pdf"`,
+      "Cache-Control": "no-store",
+    });
+    const pptxHeaders = (name: string) => ({
+      "Content-Type":
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "Content-Disposition": `attachment; filename="${name}.pptx"`,
+      "Cache-Control": "no-store",
+    });
+    const docxHeaders = (name: string) => ({
+      "Content-Type":
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "Content-Disposition": `attachment; filename="${name}.docx"`,
+      "Cache-Control": "no-store",
+    });
+
+    // Регион сохраняет отдельный (проверенный) путь рендера.
     const regionOutput = structured ? toRegionAgentOutput(structured, sessionId) : null;
 
-    if (format === "pdf" && structured) {
-      const bytes = await buildRegionPdf(structured, meta);
-      if (bytes) {
-        return new NextResponse(Buffer.from(bytes), {
-          status: 200,
-          headers: {
-            "Content-Type": "application/pdf",
-            "Content-Disposition": `attachment; filename="${baseName}.pdf"`,
-            "Cache-Control": "no-store",
-          },
-        });
-      }
-    }
+    // Обобщённый структурированный вывод для встречи / brief / strategy.
+    const docModel =
+      structured && supportsStructuredDoc(structured)
+        ? buildDocModel(structured, docTitleFor(structured, baseName), meta)
+        : null;
+
+    // ── PDF ──────────────────────────────────────────────────────────────────
     if (format === "pdf") {
+      if (structured?.kind === "region") {
+        const bytes = await buildRegionPdf(structured, meta);
+        if (bytes) {
+          return new NextResponse(Buffer.from(bytes), { status: 200, headers: pdfHeaders(baseName) });
+        }
+      }
+      if (docModel) {
+        const bytes = await buildStructuredPdf(docModel);
+        return new NextResponse(Buffer.from(bytes), { status: 200, headers: pdfHeaders(baseName) });
+      }
       return NextResponse.json(
-        { error: "PDF export is available for structured region sessions" },
+        { error: "PDF export requires structured session output" },
         { status: 400 },
       );
     }
 
+    // ── PPTX ─────────────────────────────────────────────────────────────────
     if (format === "pptx") {
+      if (docModel) {
+        const bytes = buildStructuredPptx(docModel);
+        return new NextResponse(Buffer.from(bytes), { status: 200, headers: pptxHeaders(baseName) });
+      }
       const bytes = buildPptx(regionOutput || latest!, meta);
-      return new NextResponse(Buffer.from(bytes), {
-        status: 200,
-        headers: {
-          "Content-Type":
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-          "Content-Disposition": `attachment; filename="${baseName}.pptx"`,
-          "Cache-Control": "no-store",
-        },
-      });
+      return new NextResponse(Buffer.from(bytes), { status: 200, headers: pptxHeaders(baseName) });
     }
 
+    // ── DOCX (по умолчанию) ────────────────────────────────────────────────────
+    if (docModel) {
+      const bytes = buildStructuredDocx(docModel);
+      return new NextResponse(Buffer.from(bytes), { status: 200, headers: docxHeaders(baseName) });
+    }
     const bytes = buildDocx(regionOutput || latest!, meta);
-    return new NextResponse(Buffer.from(bytes), {
-      status: 200,
-      headers: {
-        "Content-Type":
-          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        "Content-Disposition": `attachment; filename="${baseName}.docx"`,
-        "Cache-Control": "no-store",
-      },
-    });
+    return new NextResponse(Buffer.from(bytes), { status: 200, headers: docxHeaders(baseName) });
   } catch (error) {
     console.error("[export]", error);
     return NextResponse.json({ error: "Export failed" }, { status: 500 });
