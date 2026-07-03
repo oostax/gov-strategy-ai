@@ -35,6 +35,113 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+/** Первое непустое строковое значение среди синонимичных ключей объекта. */
+export function pickString(record: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim().length > 0) return value.trim();
+  }
+  return "";
+}
+
+// ── Гигиена источников: топоним + тематика, отсев мусора ────────────────────
+
+/** Тематические токены госсектор/Сбер/ИИ — для проверки релевантности источника. */
+const STRONG_TOPIC_TOKENS = [
+  "сбер",
+  "gigachat",
+  "гигачат",
+  "salute",
+  "сбераналит",
+  "облак",
+  "нейросет",
+  "генеративн",
+  "искусственн интеллект",
+  "цифров",
+  "информатизац",
+  "обращени",
+  "госуслуг",
+  "госсектор",
+  "бюджет",
+  "министерств",
+  "минцифр",
+  "нацпроект",
+  "отечественн",
+  "импортозамещ",
+  "подрядчик",
+  "госконтракт",
+  "госзакуп",
+];
+
+/** Явный мусор: магазины, словари, дизамбиг-страницы «Республика». */
+const SOURCE_DENYLIST: RegExp[] = [
+  /kartaslov\.ru/i,
+  /ktonanovenkogo\.ru/i,
+  /respublica\.ru/i,
+  /ozon\.ru/i,
+  /wildberries/i,
+  /market\.yandex/i,
+  /avito\./i,
+  /dic\.academic\.ru/i,
+  /значение слова/i,
+  /интернет-магазин/i,
+];
+
+const GENERIC_REGION_WORDS = new Set([
+  "республика",
+  "область",
+  "край",
+  "автономный",
+  "автономная",
+  "автономного",
+  "округ",
+  "округа",
+  "город",
+  "федерального",
+  "значения",
+  "российская",
+  "федерация",
+  "россия",
+  "россии",
+]);
+
+/** Различающие токены региона (без родовых слов): «Республика Татарстан» → ["татарстан"]. */
+export function regionCoreTokens(region: string): string[] {
+  return region
+    .toLowerCase()
+    .split(/[\s—–-]+/)
+    .map((token) => token.replace(/[^a-zа-яё0-9]/gi, "").trim())
+    .filter((token) => token.length >= 4 && !GENERIC_REGION_WORDS.has(token));
+}
+
+/** Тематические токены из focusTopic (значимые слова ≥5 символов) + базовый набор. */
+function topicTokens(focusTopic: string): string[] {
+  const fromFocus = focusTopic
+    .toLowerCase()
+    .split(/[\s,.;:—–-]+/)
+    .map((token) => token.replace(/[^a-zа-яё0-9]/gi, "").trim())
+    .filter((token) => token.length >= 5);
+  return Array.from(new Set([...STRONG_TOPIC_TOKENS, ...fromFocus]));
+}
+
+/**
+ * Релевантен ли источник встрече: не из денай-листа И упоминает различающий
+ * топоним региона ИЛИ тематический токен. Отсекает «Республика — Википедия»,
+ * магазины и словари, не трогая бюджетные/кейсовые источники.
+ */
+export function isRelevantSource(
+  title: string,
+  url: string,
+  excerpt: string,
+  ctx: { regionTokens: string[]; topicTokens: string[] },
+): boolean {
+  const hay = `${title} ${url} ${excerpt}`.toLowerCase();
+  if (SOURCE_DENYLIST.some((rx) => rx.test(hay))) return false;
+  if (ctx.regionTokens.some((token) => hay.includes(token))) return true;
+  if (ctx.topicTokens.some((token) => hay.includes(token))) return true;
+  return false;
+}
+
 /** Нормализует источник факта: возвращает Source только если есть непустой url. */
 export function normalizeFactSource(value: unknown): Source | undefined {
   if (!isRecord(value)) return undefined;
@@ -115,21 +222,36 @@ export async function prepareBlockSources(
     data: { region: deps.region, queries: cleanedQueries, skipCache: Boolean(options.skipCache) },
   });
 
-  const evidence = await retrieveOpenSources({
+  const evidenceRaw = await retrieveOpenSources({
     region: deps.region,
     focusTopic: cleanedQueries.slice(0, 2).join(" "),
     queries: cleanedQueries,
     limit: options.limit ?? 4,
   });
+
+  // Гигиена: отсеиваем мусор (магазины/словари/дизамбиг «Республика») по
+  // топониму+тематике. Если релевантного не осталось — лучше пусто, чем шум.
+  const relCtx = {
+    regionTokens: regionCoreTokens(deps.region || ""),
+    topicTokens: topicTokens(deps.focusTopic || ""),
+  };
+  const relevant = evidenceRaw.filter((e) =>
+    isRelevantSource(e.title || "", e.url || "", e.snippet || "", relCtx),
+  );
+  const evidence = relevant.length ? relevant : [];
   console.log(
-    `[meeting-blocks][sources] done in ${Date.now() - startedAt}ms returned=${evidence.length}`,
+    `[meeting-blocks][sources] done in ${Date.now() - startedAt}ms returned=${evidenceRaw.length} relevant=${evidence.length}`,
   );
   await logBlockEvent({
     sessionId: deps.session.id,
     runId: deps.runId,
     scope: "meeting.sources",
     message: "done",
-    data: { elapsedMs: Date.now() - startedAt, returned: evidence.length },
+    data: {
+      elapsedMs: Date.now() - startedAt,
+      returned: evidenceRaw.length,
+      relevant: evidence.length,
+    },
   });
 
   const webEvidence = formatEvidenceForPrompt(evidence, options.maxFullTextChars ?? 4000);

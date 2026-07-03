@@ -103,7 +103,9 @@ function mergeBlockData(
 /** Санитайзер формы: убирает пустые элементы массивов (как в structured-generator). */
 export function sanitizeMeetingShape(data: MeetingOutput): MeetingOutput {
   if (Array.isArray(data.agenda)) {
-    data.agenda = data.agenda.filter((block) => nonEmpty(block.topic) && nonEmpty(block.sberSays));
+    // «Renderable» синхронно с дашбордом: достаточно topic ИЛИ sberSays,
+    // иначе строгий AND мог бы снова обнулить секцию сценария.
+    data.agenda = data.agenda.filter((block) => nonEmpty(block.topic) || nonEmpty(block.sberSays));
   }
   if (Array.isArray(data.objections)) {
     data.objections = data.objections.filter((item) => nonEmpty(item.objection) && nonEmpty(item.response));

@@ -10,6 +10,7 @@ import {
   buildContextPreamble,
   buildMinistryContext,
   isRecord,
+  pickString,
 } from "./base";
 import { AGENDA_SYSTEM_PROMPT, volumeDirective } from "@/lib/prompts/meeting-blocks-contract";
 
@@ -27,7 +28,7 @@ export async function generateAgendaBlock(
     }));
   }
 
-  const userMessage = [
+  const contextBlock = [
     `Регион: ${deps.region}`,
     deps.ministry ? `Ведомство: ${deps.ministry}` : "",
     deps.lprName ? `ЛПР: ${deps.lprName}${deps.lprRole ? `, ${deps.lprRole}` : ""}` : "",
@@ -38,12 +39,16 @@ export async function generateAgendaBlock(
     buildMinistryContext(deps),
     buildTacticalContext(deps),
     webEvidence ? `\nСвежая повестка (источники):\n${webEvidence}` : "",
-    "",
-    "Составь сценарий встречи на 30 минут: 4-5 блоков. У каждого непустые time, topic, sberSays, askLpr, fixDecision.",
-    "Заложи вход/мостик, признание успеха, диагноз-вопрос (развилка), оффер, фиксацию next step. Сформулируй askLadder (max/target/min).",
   ]
     .filter(Boolean)
     .join("\n");
+
+  const userMessage = [
+    contextBlock,
+    "",
+    "Составь сценарий встречи на 30 минут: 4-5 блоков. У каждого непустые time, topic, sberSays, askLpr, fixDecision.",
+    "Заложи вход/мостик, признание успеха, диагноз-вопрос (развилка), оффер, фиксацию next step. Сформулируй askLadder (max/target/min).",
+  ].join("\n");
 
   const raw = await callBlockLLM(AGENDA_SYSTEM_PROMPT, userMessage, deps.agentInstructions, {
     sessionId: deps.session.id,
@@ -53,12 +58,46 @@ export async function generateAgendaBlock(
   });
   const parsed = parseBlockJson(raw) as { agenda?: unknown; askLadder?: unknown; sources?: unknown; hypotheses?: unknown };
 
+  let agenda = normalizeAgenda(parsed.agenda);
+  // Salvage: reasoning-модель часто заполняет askLadder, но роняет массив agenda.
+  // Добираем его отдельным узким вызовом (только массив), как в region budget.ts.
+  if (agenda.length === 0) {
+    agenda = await salvageAgenda(deps, contextBlock);
+  }
+
   return {
-    agenda: normalizeAgenda(parsed.agenda),
+    agenda,
     askLadder: normalizeAskLadder(parsed.askLadder),
     sources: normalizeSources(parsed.sources).concat(sources).slice(0, 6),
     hypotheses: normalizeHypotheses(parsed.hypotheses),
   };
+}
+
+/**
+ * Узкий повторный вызов: просим ТОЛЬКО массив agenda с обязательными полями и
+ * примером. Снимает системную ошибку reasoning-модели, роняющей вложенный массив.
+ */
+async function salvageAgenda(deps: MeetingBlockDeps, contextBlock: string): Promise<AgendaBlock[]> {
+  const salvageMessage = [
+    contextBlock,
+    "",
+    'Верни ТОЛЬКО JSON вида {"agenda":[ ... ]} — БЕЗ каких-либо других полей.',
+    "Ровно 4-5 объектов сценария 30-минутной встречи. У КАЖДОГО объекта ОБЯЗАТЕЛЬНЫ непустые: time, topic, sberSays, askLpr, fixDecision.",
+    "Структура: вход/личный мостик → признание успеха → диагноз-вопрос (развилка) → оффер → фиксация next step.",
+    'Пример одного элемента: {"id":"a_1","time":"0-3 мин","topic":"Вход и мостик","sberSays":"...","askLpr":"...","fixDecision":"..."}',
+  ].join("\n");
+  try {
+    const raw = await callBlockLLM(AGENDA_SYSTEM_PROMPT, salvageMessage, deps.agentInstructions, {
+      sessionId: deps.session.id,
+      runId: deps.runId,
+      label: "agenda.salvage",
+      maxTokens: 1600,
+    });
+    const parsed = parseBlockJson(raw) as { agenda?: unknown };
+    return normalizeAgenda(parsed.agenda);
+  } catch {
+    return [];
+  }
 }
 
 /** Контекст тезисов/возражений/участия Сбера для сценария. */
@@ -87,14 +126,21 @@ function normalizeAgenda(value: unknown): AgendaBlock[] {
   for (let i = 0; i < value.length && result.length < 6; i++) {
     const item = value[i];
     if (!isRecord(item)) continue;
-    if (!hasUsefulText(item.topic) || !hasUsefulText(item.sberSays)) continue;
+    // Толерантность к синонимам ключей (reasoning-модель варьирует названия).
+    const topic = pickString(item, ["topic", "subject", "title", "about", "theme"]);
+    const sberSays = pickString(item, ["sberSays", "say", "says", "script", "message", "line", "speech"]);
+    const askLpr = pickString(item, ["askLpr", "ask", "question", "probe", "askQuestion"]);
+    const fixDecision = pickString(item, ["fixDecision", "decision", "fix", "nextStep", "outcome", "result"]);
+    const time = pickString(item, ["time", "timing", "slot", "duration"]);
+    // Достаточно любого из topic/sberSays — недостающее заполняем осмысленно.
+    if (!topic && !sberSays) continue;
     result.push({
-      id: hasUsefulText(item.id) ? item.id : `a_${result.length + 1}`,
-      time: hasUsefulText(item.time) ? item.time.trim() : `${result.length * 6}-${(result.length + 1) * 6} мин`,
-      topic: item.topic.trim(),
-      sberSays: item.sberSays.trim(),
-      askLpr: hasUsefulText(item.askLpr) ? item.askLpr.trim() : "",
-      fixDecision: hasUsefulText(item.fixDecision) ? item.fixDecision.trim() : "",
+      id: pickString(item, ["id"]) || `a_${result.length + 1}`,
+      time: time || `${result.length * 6}-${(result.length + 1) * 6} мин`,
+      topic: topic || sberSays,
+      sberSays: sberSays,
+      askLpr,
+      fixDecision,
     });
   }
   return result;
