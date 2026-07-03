@@ -181,6 +181,108 @@ export interface StructuredOutput {
 
 // ── Адаптации под тип задачи ─────────────────────────────────────────────────
 
+// ── Тиерная модель честности (meeting) ──────────────────────────────────────
+// Каждый факт помечается источником: откуда он взят и насколько ему можно верить.
+// fact       — факт из открытых источников (со ссылкой)
+// hypothesis — гипотеза модели, выведенная из фактов
+// crm        — из карточки региона / истории Сбера (не из интернета)
+// ask        — то, что нужно спросить на встрече (не выдумываем)
+export type SourceTier = "fact" | "hypothesis" | "crm" | "ask";
+
+// Бюджетное окно ведомства: блок «сигнал / напряжение / вывод» (как в анализе региона).
+export interface MinistryBudgetWindow {
+  signal: string;          // Что видно на поверхности (бюджет, динамика ИТ-расходов)
+  tension: string;         // Где напряжение (дефицит, приоритеты)
+  decision: string;        // Вывод для встречи — как заходить
+  sources?: Source[];      // Ссылки на открытые источники
+}
+
+// Стат-карточка портрета ведомства (дефицит, объём обращений, доля ИТ-закупок).
+export interface MinistryStat {
+  id?: string;
+  label: string;           // Короткая подпись метрики
+  value: string;           // Значение с единицей, напр. «13,85 млрд ₽»
+  caption: string;         // Пояснение, что это значит для встречи
+  tier: SourceTier;
+  source?: Source;         // Источник (для tier="fact")
+}
+
+// Инициатива ведомства (зацепка) или уже внедрённое решение (конкурент / точка интеграции).
+export interface MinistryItem {
+  id?: string;
+  title: string;           // Название инициативы / системы
+  detail: string;          // Что это и почему важно для встречи
+  tier: SourceTier;
+  source?: Source;
+}
+
+// ЯДРО дашборда — портрет ведомства и повестки (собирается из открытых источников).
+export interface MinistryPortrait {
+  budgetWindow?: MinistryBudgetWindow;
+  stats?: MinistryStat[];       // Стат-карточки
+  initiatives?: MinistryItem[]; // Что ведомство уже делает (зацепки)
+  incumbents?: MinistryItem[];  // Что уже внедрено = конкуренты / точки интеграции
+}
+
+// Тиерная плитка досье ЛПР — известно / мотив / отношение / спросить.
+export interface LprTile {
+  text: string;
+  tier: SourceTier;
+  source?: Source;
+}
+
+// Досье ЛПР — тонкий честный тиерный слой (не выдуманная анкета).
+export interface LprDossier {
+  name?: string;                 // ФИО — только из источников/ввода, иначе опустить
+  role?: string;                 // Должность
+  known?: LprTile;               // Что известно (tier="fact")
+  motive?: LprTile;              // Мотив / зона решений (tier="hypothesis")
+  relationship?: LprTile;        // Отношение к Сберу (tier="crm")
+  ask?: LprTile;                 // Добрать на встрече (tier="ask")
+}
+
+// Участник встречи для карты участников.
+export interface MeetingParticipant {
+  id?: string;
+  name?: string;                 // ФИО или опустить, если не подтверждено
+  role: string;                  // Роль в встрече (структурный факт)
+  stance: "ally" | "skeptic" | "neutral";
+  whatMatters: string;           // Что для него важно / как с ним работать
+  tier: SourceTier;
+}
+
+// Тезис под повестку ЛПР, привязанный к конкретному факту.
+export interface MeetingThesis {
+  id?: string;
+  text: string;                  // Сам тезис
+  tiedTo: string;                // К какому факту/KPI ЛПР привязан
+  evidence: string;              // Доказательная база / как считаем эффект
+  tier: SourceTier;
+}
+
+// Исход встречи с сигналом-триггером и что зафиксировать.
+export interface MeetingOutcome {
+  triggerSignal: string;         // Как понять, что мы в этом исходе
+  steps: NextStep[];             // Что делаем
+  whatToCapture: string;         // Что зафиксировать письменно
+}
+
+export interface MeetingAfter {
+  outcomes?: {
+    ifYes?: MeetingOutcome;
+    ifPause?: MeetingOutcome;
+    ifNo?: MeetingOutcome;
+  };
+  first48h?: NextStep[];         // Первые 48 часов после встречи
+}
+
+// Лестница запросов: максимум / цель / минимум.
+export interface AskLadder {
+  max?: string;
+  target?: string;
+  min?: string;
+}
+
 // Для meeting_preparation — другая структура первого экрана
 export interface MeetingOutput {
   // Первый экран
@@ -206,6 +308,14 @@ export interface MeetingOutput {
   sberActions?: SberAction[];
   visuals?: OutputVisual[];
 
+  // ── Новые опциональные поля тиерной модели (старые сессии рендерятся без них) ──
+  askLadder?: AskLadder;             // Лестница запросов (максимум / цель / минимум)
+  ministryPortrait?: MinistryPortrait; // ЯДРО: портрет ведомства и повестки
+  lprDossier?: LprDossier;           // Досье ЛПР (тиерный слой)
+  participants?: MeetingParticipant[]; // Карта участников встречи
+  theses?: MeetingThesis[];          // Тезисы под повестку ЛПР
+  afterMeeting?: MeetingAfter;       // Углублённый блок «После встречи»
+
   // Источники
   sources: Source[];
   hypotheses: string[];
@@ -225,6 +335,11 @@ export interface Objection {
   objection: string;       // Что скажет ЛПР
   response: string;        // Что отвечаем
   factNeeded: string;      // Какой факт нужен для подтверждения
+  // Новые опциональные поля (углублённые возражения)
+  trueReason?: string;     // Истинная причина возражения
+  fallback?: string;       // Запасной ход, если ответ не сработал
+  tier?: SourceTier;       // На что опирается ответ: факт / гипотеза / специфично ЛПР
+  specific?: boolean;      // true = персональное возражение этого ЛПР
 }
 
 // ── Для executive_brief — ещё короче ─────────────────────────────────────────

@@ -10,12 +10,15 @@ import {
   Compass,
   FileText,
   Flag,
+  Landmark,
   Lightbulb,
   MapPin,
   MessageSquare,
   Route,
   ShieldCheck,
   Target,
+  User,
+  Users,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -130,13 +133,32 @@ function getFocus(output: TypedOutput) {
 
 function getSections(output: TypedOutput) {
   if (output.kind === "meeting") {
+    const data = output.data as MeetingOutput;
+    const hasMinistry =
+      data.ministryPortrait &&
+      (data.ministryPortrait.budgetWindow ||
+        (data.ministryPortrait.stats?.length ?? 0) > 0 ||
+        (data.ministryPortrait.initiatives?.length ?? 0) > 0 ||
+        (data.ministryPortrait.incumbents?.length ?? 0) > 0);
+    const hasLpr =
+      data.lprDossier &&
+      (data.lprDossier.known ||
+        data.lprDossier.motive ||
+        data.lprDossier.relationship ||
+        data.lprDossier.ask);
+    const hasParticipants = (data.participants?.length ?? 0) > 0;
+    const hasTheses = (data.theses?.length ?? 0) > 0;
     return [
       { href: "#decision", label: "Цель", icon: Target, primary: true },
+      ...(hasMinistry ? [{ href: "#ministry", label: "Ведомство", icon: Landmark, primary: true }] : []),
+      ...(hasLpr ? [{ href: "#lpr", label: "ЛПР", icon: User, primary: true }] : []),
+      ...(hasParticipants ? [{ href: "#players", label: "Участники", icon: Users }] : []),
+      ...(hasTheses ? [{ href: "#theses", label: "Тезисы", icon: Lightbulb }] : []),
       { href: "#sber-actions", label: "Роль Сбера", icon: BadgeCheck },
       { href: "#agenda", label: "Сценарий", icon: ClipboardList, primary: true },
       { href: "#objections", label: "Возражения", icon: MessageSquare },
-      { href: "#follow-up", label: "После встречи", icon: ArrowRight, primary: true },
-      { href: "#sources", label: "Проверки", icon: ShieldCheck },
+      { href: "#follow-up", label: "После встречи", icon: ArrowRight },
+      { href: "#sources", label: "Источники", icon: Flag },
     ];
   }
 

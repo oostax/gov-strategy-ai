@@ -183,7 +183,38 @@ function isUsableStructuredData(
   }
 
   if (kind === "meeting") {
-    return typeof value.meetingGoal === "string" && Array.isArray(value.agenda) && value.agenda.length > 0;
+    const agenda = value.agenda;
+    const objections = value.objections;
+    // Строго: цель непустая, а сценарий не только присутствует, но и ЗАПОЛНЕН —
+    // у каждого блока непустые topic и sberSays. Это устраняет баг пустого сценария.
+    const agendaFilled =
+      Array.isArray(agenda) &&
+      agenda.length > 0 &&
+      agenda.every(
+        (block) =>
+          isRecord(block) &&
+          typeof block.topic === "string" &&
+          block.topic.trim().length > 0 &&
+          typeof block.sberSays === "string" &&
+          block.sberSays.trim().length > 0,
+      );
+    // Возражения если присутствуют — не должны быть пустыми объектами.
+    const objectionsOk =
+      !Array.isArray(objections) ||
+      objections.every(
+        (item) =>
+          isRecord(item) &&
+          typeof item.objection === "string" &&
+          item.objection.trim().length > 0 &&
+          typeof item.response === "string" &&
+          item.response.trim().length > 0,
+      );
+    return (
+      typeof value.meetingGoal === "string" &&
+      value.meetingGoal.trim().length > 0 &&
+      agendaFilled &&
+      objectionsOk
+    );
   }
 
   if (kind === "brief") {
@@ -229,7 +260,70 @@ function describeStructuredDataIssues(
     if (!isRecord(data.strategicPriorities) || !Array.isArray(data.strategicPriorities.confirmed)) issues.push("strategicPriorities missing");
     if (requireSources && (!Array.isArray(data.sources) || data.sources.length === 0)) issues.push("sources empty");
   }
+  if (kind === "meeting") {
+    if (typeof data.meetingGoal !== "string" || !data.meetingGoal.trim()) issues.push("meetingGoal empty");
+    if (!Array.isArray(data.agenda) || data.agenda.length === 0) {
+      issues.push("agenda empty");
+    } else if (
+      !data.agenda.every(
+        (block) =>
+          isRecord(block) &&
+          typeof block.topic === "string" &&
+          block.topic.trim() &&
+          typeof block.sberSays === "string" &&
+          block.sberSays.trim(),
+      )
+    ) {
+      issues.push("agenda has empty topic/sberSays");
+    }
+    if (
+      Array.isArray(data.objections) &&
+      !data.objections.every(
+        (item) =>
+          isRecord(item) &&
+          typeof item.objection === "string" &&
+          item.objection.trim() &&
+          typeof item.response === "string" &&
+          item.response.trim(),
+      )
+    ) {
+      issues.push("objections have empty fields");
+    }
+  }
   return issues.length ? issues : ["unknown shape mismatch"];
+}
+
+/**
+ * Санитайзер meeting-документа перед валидацией: убирает ПУСТЫЕ элементы массивов
+ * (блоки сценария без темы/реплики, возражения без текста, участники/тезисы-пустышки).
+ * Это гарантирует, что пустой сценарий не пройдёт валидацию и попадёт на дозаполнение,
+ * а не отрисуется дырявым. Мутирует и возвращает тот же объект.
+ */
+function sanitizeMeetingShape(value: unknown): unknown {
+  const data = structuredDataCandidate(value);
+  if (!isRecord(data)) return value;
+
+  const nonEmpty = (v: unknown) => typeof v === "string" && v.trim().length > 0;
+
+  if (Array.isArray(data.agenda)) {
+    data.agenda = data.agenda.filter(
+      (block) => isRecord(block) && nonEmpty(block.topic) && nonEmpty(block.sberSays),
+    );
+  }
+  if (Array.isArray(data.objections)) {
+    data.objections = data.objections.filter(
+      (item) => isRecord(item) && nonEmpty(item.objection) && nonEmpty(item.response),
+    );
+  }
+  if (Array.isArray(data.theses)) {
+    data.theses = data.theses.filter((item) => isRecord(item) && nonEmpty(item.text));
+  }
+  if (Array.isArray(data.participants)) {
+    data.participants = data.participants.filter(
+      (item) => isRecord(item) && nonEmpty(item.role) && nonEmpty(item.whatMatters),
+    );
+  }
+  return data;
 }
 
 async function repairStructuredShape({
@@ -249,6 +343,7 @@ async function repairStructuredShape({
   evidencePack: string;
   blueprint: string;
 }): Promise<unknown> {
+  if (kind === "meeting") candidate = sanitizeMeetingShape(candidate);
   if (isUsableStructuredData(kind, candidate, { requireSources: false })) return structuredDataCandidate(candidate);
 
   const raw = await callLLM({
@@ -287,6 +382,16 @@ async function repairStructuredShape({
           "- nextSteps: 3-4 элемента.",
           "- sources: только из списка выше.",
           "",
+          "Требования к полноте для meeting (КРИТИЧНО — устраняем баг пустого сценария):",
+          "- meetingGoal непустой.",
+          "- agenda: 4-5 блоков. У КАЖДОГО блока непустые topic, sberSays, askLpr, fixDecision. Пустых ячеек и подписей без содержания быть НЕ должно. Если блок пустой — заполни его осмысленно или удали.",
+          "- objections: 3-5 возражений; у каждого непустые objection, response, factNeeded (и по возможности trueReason, fallback).",
+          "- theses: 3-4 тезиса, каждый с tiedTo (к какому факту ЛПР привязан).",
+          "- participants: 2-4 участника с role, stance, whatMatters.",
+          "- ministryPortrait: если есть источники — заполни budgetWindow и 2-4 stats с tier и source.",
+          "- Факты (tier='fact') — только из блока «Сырые источники» с реальным url. Чего нет — hypothesis/ask, без выдумки ФИО и цифр.",
+          "- sources: только из списка выше.",
+          "",
           `Частичный/неполный JSON, который нужно исправить:\n${JSON.stringify(candidate).slice(0, 18000)}`,
         ].join("\n"),
       },
@@ -296,7 +401,7 @@ async function repairStructuredShape({
     responseFormat: "json_object",
   });
 
-  const repaired = tryParseJson(raw);
+  const repaired = kind === "meeting" ? sanitizeMeetingShape(tryParseJson(raw)) : tryParseJson(raw);
   assertUsableStructuredData(kind, repaired, { requireSources: false });
   return structuredDataCandidate(repaired);
 }
