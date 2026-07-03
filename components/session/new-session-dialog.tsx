@@ -193,7 +193,7 @@ export function NewSessionDialog({
   async function applyOneshot() {
     const phrase = oneshotText.trim();
     if (phrase.length < 3) {
-      toast.error("Опишите задачу одной-двумя фразами");
+      toast.error("Укажите задачу одной-двумя фразами");
       return;
     }
     setClassifying(true);
@@ -216,10 +216,10 @@ export function NewSessionDialog({
         form.setValue("focusTopic", phrase, { shouldValidate: false });
       }
       const suggestedTask = (data.suggestion.taskType as TaskType | undefined) || taskType;
-      toast.success("Черновик подготовлен · проверьте и запустите");
+      toast.success("Черновик подготовлен");
       setStep(getStepsForTask(suggestedTask).length - 1);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Ошибка распознавания задачи");
+      toast.error(error instanceof Error ? error.message : "Не удалось распознать задачу");
     } finally {
       setClassifying(false);
     }
@@ -227,7 +227,7 @@ export function NewSessionDialog({
 
   function applyTemplate(patch: Partial<CreateSessionInput>) {
     applySuggestion(patch);
-    toast.success(`Шаблон применён · ${taskLabels[(patch.taskType as TaskType) || taskType]}`);
+    toast.success(`Применён шаблон «${taskLabels[(patch.taskType as TaskType) || taskType]}»`);
     setStep(1);
   }
 
@@ -302,12 +302,12 @@ export function NewSessionDialog({
                   {/* Крупное поле и микрофон */}
                   <div>
                     <SectionTitle
-                      title="Опишите задачу одной фразой"
-                      sub="Система подготовит черновик сессии. При необходимости скорректируйте параметры перед запуском."
+                      title="Задача одной фразой"
+                      sub="Черновик сессии формируется автоматически. Параметры можно скорректировать перед запуском."
                     />
                     <div className="relative rounded-2xl border bg-background p-3 focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/40">
                       <Textarea
-                        placeholder="Например: завтра в 10 встреча с Миннигуловым по платформе данных ЖКХ, нужна краткая записка с экономикой"
+                        placeholder="Завтра в 10 встреча с Миннигуловым по платформе данных ЖКХ, нужна краткая записка с экономикой"
                         value={oneshotText}
                         onChange={(e) => setOneshotText(e.target.value)}
                         onKeyDown={(e) => {
@@ -346,7 +346,7 @@ export function NewSessionDialog({
 
                   {/* Шаблоны */}
                   <div>
-                    <SectionTitle title="Или выберите шаблон" />
+                    <SectionTitle title="Шаблоны" />
                     <div className="grid gap-1.5">
                       {quickTemplates.map((tpl) => (
                         <button
@@ -373,7 +373,7 @@ export function NewSessionDialog({
                     className="w-full rounded-xl border border-dashed py-3 text-sm text-muted-foreground transition hover:border-foreground/40 hover:text-foreground"
                     onClick={() => setStep(1)}
                   >
-                    Пропустить и заполнить вручную
+                    Заполнить вручную
                   </button>
                 </div>
               )}
@@ -443,7 +443,7 @@ export function NewSessionDialog({
                       placeholder="Министр цифрового развития Татарстана"
                       {...form.register("meetingWith")}
                     />
-                    <FieldHint>ФИО, должность и ведомство — агент учтёт роль и приоритеты ЛПР</FieldHint>
+                    <FieldHint>ФИО, должность и ведомство</FieldHint>
                   </div>
 
                   {!isFollowup && (
@@ -469,7 +469,7 @@ export function NewSessionDialog({
                           </button>
                         ))}
                       </div>
-                      <Input placeholder="Или укажите другую дату" {...form.register("meetingDate")} />
+                      <Input placeholder="Укажите другую дату" {...form.register("meetingDate")} />
                     </div>
                   )}
 
@@ -489,7 +489,7 @@ export function NewSessionDialog({
                     <FieldHint>
                       {isFollowup
                         ? "Главный итог встречи одной фразой"
-                        : "Конкретное решение — не «обсудить», а «получить»"}
+                        : "Конкретный результат, а не тема обсуждения"}
                     </FieldHint>
                   </div>
 
@@ -516,8 +516,8 @@ export function NewSessionDialog({
                       rows={3}
                       placeholder={
                         isFollowup
-                          ? "Обсуждали платформу данных ЖКХ, он попросил показать кейсы из других регионов..."
-                          : "Ранее обсуждали платформу данных, он скептически относится к ИИ, фокус на сокращении бюджета..."
+                          ? "Обсуждали платформу данных ЖКХ, запрошены кейсы из других регионов"
+                          : "Ранее обсуждалась платформа данных, приоритет — сокращение бюджета"
                       }
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && !e.shiftKey) e.stopPropagation();
@@ -526,8 +526,8 @@ export function NewSessionDialog({
                     />
                     <FieldHint>
                       {isFollowup
-                        ? "Ключевые моменты встречи — агент структурирует итоги"
-                        : "Про ЛПР, региональную повестку или текущие проекты Сбера"}
+                        ? "Ключевые моменты встречи"
+                        : "ЛПР, региональная повестка, текущие проекты Сбера"}
                     </FieldHint>
                   </div>
 
@@ -589,7 +589,7 @@ export function NewSessionDialog({
                         {form.formState.errors.focusTopic.message}
                       </p>
                     )}
-                    <FieldHint>Чем конкретнее — тем точнее материал</FieldHint>
+                    <FieldHint>Конкретная формулировка повышает точность материала</FieldHint>
                   </div>
                 </div>
               )}
@@ -725,12 +725,12 @@ export function NewSessionDialog({
                       placeholder={
                         isMeeting
                           ? "Встреча с Минцифры Татарстана"
-                          : "Например: Стратегия по ЦЭ на 2026"
+                          : "Стратегия по ЦЭ на 2026"
                       }
                       maxLength={60}
                       {...form.register("title")}
                     />
-                    <FieldHint>Используется в списке сессий. Если не указано — подставляется из задачи.</FieldHint>
+                    <FieldHint>Используется в списке сессий. Без указания — подставляется из задачи.</FieldHint>
                   </div>
 
                   {/* Доп. блоки */}
@@ -1039,7 +1039,7 @@ function RegionPicker({
         ))}
       </div>
       <Input
-        placeholder="Или введите регион..."
+        placeholder="Введите регион"
         value={regionInput}
         onChange={(e) => {
           setRegionInput(e.target.value);
@@ -1138,7 +1138,7 @@ function RegionDataHints({
   return (
     <div className="mt-3 rounded-lg border border-amber-200/70 bg-amber-50/60 p-2.5 text-[11px] dark:border-amber-900/40 dark:bg-amber-950/20">
       <p className="font-semibold text-amber-800 dark:text-amber-200">
-        Перед генерацией можно дополнить карточку
+        Для более точного материала дополните карточку региона
       </p>
       <ul className="mt-1 space-y-0.5 text-muted-foreground">
         {gaps.map((gap) => (
@@ -1229,7 +1229,7 @@ function ShareField({
           ))}
         </div>
       )}
-      <FieldHint>Они получат ссылку для просмотра после создания сессии</FieldHint>
+      <FieldHint>Ссылка для просмотра будет отправлена после создания сессии</FieldHint>
     </div>
   );
 }

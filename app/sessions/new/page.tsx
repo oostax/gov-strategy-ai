@@ -27,7 +27,9 @@ import {
   taskOutputDescription,
   taskWhenToUse,
   type CreateSessionInput,
+  type DetailLevel,
   type TaskType,
+  type UrgencyLevel,
 } from "@/lib/schemas/session";
 import { cn } from "@/lib/utils";
 import { searchRegions } from "@/lib/data/russian-regions";
@@ -57,6 +59,98 @@ const taskOrder: TaskType[] = [
   "scenario_analysis",
 ];
 
+/**
+ * Состав материала по типам задач. `core: true` — блок входит всегда,
+ * независимо от объёма и срочности. Названия синхронизированы с реальными
+ * секциями дашбордов (components/strategy/structured/*).
+ */
+type MaterialBlock = { label: string; core: boolean };
+
+const materialPlan: Record<TaskType, MaterialBlock[]> = {
+  meeting_preparation: [
+    { label: "Портрет ведомства", core: true },
+    { label: "Досье ЛПР", core: true },
+    { label: "Карта участников", core: false },
+    { label: "Тезисы", core: true },
+    { label: "Участие Сбера", core: true },
+    { label: "Сценарий встречи", core: true },
+    { label: "Возражения", core: false },
+    { label: "После встречи", core: true },
+    { label: "Источники", core: true },
+  ],
+  meeting_followup: [
+    { label: "Итоги", core: true },
+    { label: "Договорённости", core: true },
+    { label: "Ответственные и сроки", core: true },
+    { label: "Открытые вопросы", core: false },
+    { label: "Следующие шаги", core: true },
+    { label: "Источники", core: true },
+  ],
+  executive_brief: [
+    { label: "Решение", core: true },
+    { label: "Доказательства", core: true },
+    { label: "Экономика", core: false },
+    { label: "Риски", core: true },
+    { label: "Следующий шаг", core: true },
+    { label: "Источники", core: true },
+  ],
+  region_strategy: [
+    { label: "Ключевой вывод", core: true },
+    { label: "Отрасли", core: true },
+    { label: "Бюджет", core: true },
+    { label: "Приоритеты", core: false },
+    { label: "Сценарии", core: false },
+    { label: "Конкуренты", core: false },
+    { label: "Точки входа", core: false },
+    { label: "Риски", core: true },
+    { label: "Что проверить", core: false },
+    { label: "Источники", core: true },
+  ],
+  sber_region_strategy: [
+    { label: "Ключевой вывод", core: true },
+    { label: "Отрасли", core: true },
+    { label: "Бюджет", core: true },
+    { label: "Приоритеты", core: false },
+    { label: "Сценарии", core: false },
+    { label: "Конкуренты", core: false },
+    { label: "Точки входа", core: false },
+    { label: "Портфель Сбера", core: true },
+    { label: "Риски", core: true },
+    { label: "Что проверить", core: false },
+    { label: "Источники", core: true },
+  ],
+  strategic_bets: [
+    { label: "Ставки", core: true },
+    { label: "Матрица выбора", core: true },
+    { label: "План", core: true },
+    { label: "Метрики", core: false },
+    { label: "Риски", core: true },
+    { label: "Следующие шаги", core: true },
+  ],
+  scenario_analysis: [
+    { label: "Сценарии", core: true },
+    { label: "Триггеры", core: true },
+    { label: "Позиция Сбера", core: true },
+    { label: "Ранние сигналы", core: false },
+  ],
+};
+
+type BlockStatus = "core" | "compact" | "full";
+
+/** Срочность, при которой не-core блоки сжимаются. */
+const compactUrgencies: UrgencyLevel[] = ["2_hours", "today"];
+
+function resolveBlockStatus(
+  block: MaterialBlock,
+  detailLevel: DetailLevel,
+  urgency: UrgencyLevel,
+): BlockStatus {
+  if (block.core) return "core";
+  if (detailLevel === "deep") return "full";
+  if (detailLevel === "short" || compactUrgencies.includes(urgency)) return "compact";
+  return "full";
+}
+
 export default function NewSessionPage() {
   const {
     form,
@@ -69,6 +163,7 @@ export default function NewSessionPage() {
     taskType,
     horizon,
     detailLevel,
+    urgency,
     region,
     regionId,
     needsHorizon,
@@ -366,6 +461,8 @@ export default function NewSessionPage() {
                   </button>
                 </div>
               </div>
+
+              <MaterialPlan taskType={taskType} detailLevel={detailLevel} urgency={urgency} />
             </div>
           )}
 
@@ -414,6 +511,66 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+/**
+ * Список блоков, которые войдут в итоговый материал для выбранного типа задачи.
+ * Состав адаптируется под срочность и объём: при коротком/срочном режиме
+ * необязательные блоки помечаются как «сжато», при глубоком объёме — «подробно».
+ * Ядровые блоки присутствуют всегда и не зависят от настроек.
+ */
+function MaterialPlan({
+  taskType,
+  detailLevel,
+  urgency,
+}: {
+  taskType: TaskType;
+  detailLevel: DetailLevel;
+  urgency: UrgencyLevel;
+}) {
+  const blocks = materialPlan[taskType];
+  const coreCount = blocks.filter((b) => b.core).length;
+
+  return (
+    <div className="rounded-2xl border p-3.5">
+      <div className="mb-2.5 flex items-baseline justify-between gap-2">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          План материала
+        </p>
+        <span className="shrink-0 text-[11px] text-muted-foreground">
+          {coreCount} из {blocks.length} обязательных
+        </span>
+      </div>
+      <ul className="space-y-1">
+        {blocks.map((block) => {
+          const status = resolveBlockStatus(block, detailLevel, urgency);
+          return (
+            <li
+              key={block.label}
+              className={cn(
+                "flex items-center justify-between gap-3 rounded-lg px-2.5 py-1.5 text-xs",
+                status === "compact" ? "text-muted-foreground/70" : "text-foreground",
+              )}
+            >
+              <span className="min-w-0 truncate">{block.label}</span>
+              <span
+                className={cn(
+                  "shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+                  status === "core"
+                    ? "bg-primary/10 text-primary"
+                    : status === "full"
+                      ? "bg-muted text-muted-foreground"
+                      : "border border-dashed text-muted-foreground/70",
+                )}
+              >
+                {status === "core" ? "обязательно" : status === "full" ? "подробно" : "сжато"}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 function RegionDataHints({
   profile,
 }: {
@@ -449,7 +606,7 @@ function RegionDataHints({
   return (
     <div className="mt-2 rounded-lg border border-amber-200/70 bg-amber-50/60 p-2 text-[11px] dark:border-amber-900/40 dark:bg-amber-950/20">
       <p className="font-semibold text-amber-800 dark:text-amber-200">
-        Чтобы агент дал более точный материал
+        Для более точного материала дополните карточку региона
       </p>
       <ul className="mt-1 space-y-0.5 text-muted-foreground">
         {gaps.map((gap) => (
