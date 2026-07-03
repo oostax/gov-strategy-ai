@@ -30,6 +30,17 @@ export const taskTypes = [
 export const horizons = ["3_months", "12_months", "2028", "2030"] as const;
 export const detailLevels = ["short", "medium", "deep"] as const;
 
+/**
+ * План материала: упорядоченный список ВКЛЮЧЁННЫХ id блоков + выбранный объём.
+ * Опционален — старые сессии без него рендерятся и генерируются как раньше.
+ * id блоков — из единого реестра lib/schemas/material-plan.ts.
+ */
+export const materialPlanSchema = z.object({
+  blocks: z.array(z.string()),
+  volume: z.enum(detailLevels),
+});
+export type MaterialPlanSelection = z.infer<typeof materialPlanSchema>;
+
 /** Срочность задачи. Влияет на тон, объём и подбор playbook'ов. */
 export const urgencyLevels = ["2_hours", "today", "24h", "week", "flex"] as const;
 export type UrgencyLevel = (typeof urgencyLevels)[number];
@@ -114,6 +125,8 @@ export const sessionProfileSchema = z.object({
   meetingGoal: z.string().optional(),
   meetingContext: z.string().optional(),
   detailLevel: z.enum(detailLevels),
+  /** План материала: включённые блоки в порядке + объём (опционально). */
+  materialPlan: materialPlanSchema.optional(),
   outputFormat: z.enum(outputFormats),
   urgency: z.enum(urgencyLevels),
   deliveryFormat: z.enum(deliveryFormats),

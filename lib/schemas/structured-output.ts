@@ -316,6 +316,13 @@ export interface MeetingOutput {
   theses?: MeetingThesis[];          // Тезисы под повестку ЛПР
   afterMeeting?: MeetingAfter;       // Углублённый блок «После встречи»
 
+  /**
+   * Порядок и состав секций из «Плана материала» (id блоков реестра
+   * lib/schemas/material-plan.ts). Дашборд рендерит секции в этом порядке
+   * и пропускает не включённые. Опционально — старые сессии без него.
+   */
+  sectionOrder?: string[];
+
   // Источники
   sources: Source[];
   hypotheses: string[];

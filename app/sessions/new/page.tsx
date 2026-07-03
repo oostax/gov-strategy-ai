@@ -11,8 +11,11 @@ import {
   Check,
   CheckCircle2,
   ClipboardCheck,
+  GaugeCircle,
+  GripVertical,
+  Lightbulb,
   Loader2,
-  Map,
+  Map as MapIcon,
   MapPin,
   Mic,
   Pencil,
@@ -35,6 +38,13 @@ import {
   type TaskType,
   type UrgencyLevel,
 } from "@/lib/schemas/session";
+import {
+  blocksForTask,
+  defaultEnabledIds,
+  isBlockDefaultOn,
+  VOLUME_LABEL,
+  type MaterialBlock,
+} from "@/lib/schemas/material-plan";
 import { cn } from "@/lib/utils";
 import { searchRegions } from "@/lib/data/russian-regions";
 import { getStepsForTask, useSessionForm } from "@/components/session/use-session-form";
@@ -48,7 +58,7 @@ const taskIcon: Record<TaskType, React.ComponentType<{ className?: string }>> = 
   meeting_followup: ClipboardCheck,
   executive_brief: BriefcaseBusiness,
   sber_region_strategy: Building2,
-  region_strategy: Map,
+  region_strategy: MapIcon,
   strategic_bets: Target,
   scenario_analysis: BarChart3,
 };
@@ -62,98 +72,6 @@ const taskOrder: TaskType[] = [
   "strategic_bets",
   "scenario_analysis",
 ];
-
-/**
- * Состав материала по типам задач. `core: true` — блок входит всегда,
- * независимо от объёма и срочности. Названия синхронизированы с реальными
- * секциями дашбордов (components/strategy/structured/*).
- */
-type MaterialBlock = { label: string; core: boolean };
-
-const materialPlan: Record<TaskType, MaterialBlock[]> = {
-  meeting_preparation: [
-    { label: "Портрет ведомства", core: true },
-    { label: "Досье ЛПР", core: true },
-    { label: "Карта участников", core: false },
-    { label: "Тезисы", core: true },
-    { label: "Участие Сбера", core: true },
-    { label: "Сценарий встречи", core: true },
-    { label: "Возражения", core: false },
-    { label: "После встречи", core: true },
-    { label: "Источники", core: true },
-  ],
-  meeting_followup: [
-    { label: "Итоги", core: true },
-    { label: "Договорённости", core: true },
-    { label: "Ответственные и сроки", core: true },
-    { label: "Открытые вопросы", core: false },
-    { label: "Следующие шаги", core: true },
-    { label: "Источники", core: true },
-  ],
-  executive_brief: [
-    { label: "Решение", core: true },
-    { label: "Доказательства", core: true },
-    { label: "Экономика", core: false },
-    { label: "Риски", core: true },
-    { label: "Следующий шаг", core: true },
-    { label: "Источники", core: true },
-  ],
-  region_strategy: [
-    { label: "Ключевой вывод", core: true },
-    { label: "Отрасли", core: true },
-    { label: "Бюджет", core: true },
-    { label: "Приоритеты", core: false },
-    { label: "Сценарии", core: false },
-    { label: "Конкуренты", core: false },
-    { label: "Точки входа", core: false },
-    { label: "Риски", core: true },
-    { label: "Что проверить", core: false },
-    { label: "Источники", core: true },
-  ],
-  sber_region_strategy: [
-    { label: "Ключевой вывод", core: true },
-    { label: "Отрасли", core: true },
-    { label: "Бюджет", core: true },
-    { label: "Приоритеты", core: false },
-    { label: "Сценарии", core: false },
-    { label: "Конкуренты", core: false },
-    { label: "Точки входа", core: false },
-    { label: "Портфель Сбера", core: true },
-    { label: "Риски", core: true },
-    { label: "Что проверить", core: false },
-    { label: "Источники", core: true },
-  ],
-  strategic_bets: [
-    { label: "Ставки", core: true },
-    { label: "Матрица выбора", core: true },
-    { label: "План", core: true },
-    { label: "Метрики", core: false },
-    { label: "Риски", core: true },
-    { label: "Следующие шаги", core: true },
-  ],
-  scenario_analysis: [
-    { label: "Сценарии", core: true },
-    { label: "Триггеры", core: true },
-    { label: "Позиция Сбера", core: true },
-    { label: "Ранние сигналы", core: false },
-  ],
-};
-
-type BlockStatus = "core" | "compact" | "full";
-
-/** Срочность, при которой не-core блоки сжимаются. */
-const compactUrgencies: UrgencyLevel[] = ["2_hours", "today"];
-
-function resolveBlockStatus(
-  block: MaterialBlock,
-  detailLevel: DetailLevel,
-  urgency: UrgencyLevel,
-): BlockStatus {
-  if (block.core) return "core";
-  if (detailLevel === "deep") return "full";
-  if (detailLevel === "short" || compactUrgencies.includes(urgency)) return "compact";
-  return "full";
-}
 
 // ── Точка входа: переключатель «диалог / ручная форма» ──────────────────────
 
@@ -196,6 +114,160 @@ type Phase = "brief" | "recognizing" | "clarify";
 type Turn =
   | { role: "assistant"; text: string }
   | { role: "user"; text: string };
+
+// ── Интерактивный план материала: состояние (порядок + вкл/выкл + объём) ─────
+
+/**
+ * Состояние «Плана материала»: единый источник для UI и submit.
+ *  - `order` — ВСЕ id блоков типа в текущем (перетаскиваемом) порядке;
+ *  - `enabled` — множество включённых id (core всегда включены);
+ *  - `volume` — объём (синхронизирован с detailLevel формы).
+ * При смене типа задачи — сброс к дефолту типа. При смене объёма —
+ * пересчёт включённости НЕ-core блоков (порядок пользователя сохраняется).
+ */
+type PlanState = {
+  order: string[];
+  enabled: Set<string>;
+  volume: DetailLevel;
+};
+
+function useMaterialPlan(taskType: TaskType, volume: DetailLevel) {
+  const [state, setState] = useState<PlanState>(() => ({
+    order: blocksForTask(taskType).map((b) => b.id),
+    enabled: new Set(defaultEnabledIds(taskType, volume)),
+    volume,
+  }));
+
+  // Смена типа задачи — полный сброс к дефолту нового типа для текущего объёма.
+  useEffect(() => {
+    setState({
+      order: blocksForTask(taskType).map((b) => b.id),
+      enabled: new Set(defaultEnabledIds(taskType, volume)),
+      volume,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskType]);
+
+  // Смена объёма (из единого контрола) — пересчёт дефолтной включённости
+  // НЕ-core блоков; порядок и core-блоки не трогаем.
+  useEffect(() => {
+    if (state.volume === volume) return;
+    setState((prev) => {
+      const next = new Set<string>();
+      for (const block of blocksForTask(taskType)) {
+        if (isBlockDefaultOn(block, volume)) next.add(block.id);
+      }
+      return { ...prev, enabled: next, volume };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [volume]);
+
+  const toggle = useCallback(
+    (block: MaterialBlock) => {
+      if (block.core) return; // core-блоки нельзя выключить
+      setState((prev) => {
+        const enabled = new Set(prev.enabled);
+        if (enabled.has(block.id)) enabled.delete(block.id);
+        else enabled.add(block.id);
+        return { ...prev, enabled };
+      });
+    },
+    [],
+  );
+
+  // Перестановка: перемещает блок с позиции from на позицию to (drag&drop).
+  const move = useCallback((from: number, to: number) => {
+    setState((prev) => {
+      if (from === to || from < 0 || to < 0) return prev;
+      const order = [...prev.order];
+      if (from >= order.length || to >= order.length) return prev;
+      const [moved] = order.splice(from, 1);
+      order.splice(to, 0, moved);
+      return { ...prev, order };
+    });
+  }, []);
+
+  /** Итог для submit: включённые id в текущем порядке. */
+  const enabledOrdered = state.order.filter((id) => state.enabled.has(id));
+
+  return { state, toggle, move, enabledOrdered };
+}
+
+/**
+ * Честная готовность данных: считаем из известного (заполнен ли профиль региона
+ * в БД, известен ли ЛПР для встречи, задан ли фокус). Возвращает % и причины.
+ */
+function computeReadiness(input: {
+  isMeeting: boolean;
+  hasRegion: boolean;
+  hasRegionProfile: boolean;
+  hasMeetingWith: boolean;
+  hasFocus: boolean;
+  urgency: UrgencyLevel;
+}): { percent: number; reasons: string[]; tone: "low" | "mid" | "high" } {
+  const { isMeeting, hasRegion, hasRegionProfile, hasMeetingWith, hasFocus, urgency } = input;
+  let score = 40; // базовый уровень: система всегда что-то соберёт из открытых источников
+  const reasons: string[] = [];
+
+  if (hasFocus) score += 15;
+  else reasons.push("фокус не задан");
+
+  if (hasRegion) {
+    if (hasRegionProfile) {
+      score += 30;
+    } else {
+      score += 8;
+      reasons.push("регион не заполнен");
+    }
+  } else {
+    reasons.push("регион не указан");
+  }
+
+  if (isMeeting) {
+    if (hasMeetingWith) score += 12;
+    else reasons.push("ЛПР по роли, без ФИО");
+  } else {
+    score += 8;
+  }
+
+  if (urgency === "2_hours") reasons.push("срок сжатый — 2 часа");
+  else if (urgency === "today") reasons.push("срок сжатый — сегодня");
+
+  // Подсказка о самом дешёвом приросте.
+  if (hasRegion && !hasRegionProfile) reasons.push("заполните регион → +30%");
+
+  const percent = Math.max(10, Math.min(95, score));
+  const tone = percent >= 70 ? "high" : percent >= 45 ? "mid" : "low";
+  return { percent, reasons: reasons.slice(0, 4), tone };
+}
+
+/**
+ * Угол подачи — краткая строка из фокуса/типа/срочности. Простое правило,
+ * без выдумывания фактов: описывает, как система будет подавать материал.
+ */
+function computeAngle(input: {
+  taskType: TaskType;
+  isMeeting: boolean;
+  hasRegionProfile: boolean;
+  hasRegion: boolean;
+  urgency: UrgencyLevel;
+}): string {
+  const { taskType, isMeeting, hasRegionProfile, hasRegion, urgency } = input;
+  const tight = urgency === "2_hours" || urgency === "today";
+  if (isMeeting) {
+    if (tight) return "Сжатый сценарий: тезисы и ключевые решения без углублённого разбора";
+    return "От повестки ЛПР: тезисы, привязанные к его задачам и фактам";
+  }
+  if (taskType === "region_strategy" || taskType === "sber_region_strategy") {
+    if (hasRegion && !hasRegionProfile)
+      return "Аналитический срез из открытых источников: спорные места помечаются гипотезами";
+    return "Аналитический срез: отрасли, бюджет и приоритеты региона на 5 лет";
+  }
+  if (taskType === "executive_brief") return "Одна страница: позиция → обоснование → решение для ВП";
+  if (taskType === "strategic_bets") return "Выбор направления: ставки с матрицей эффект × реализуемость";
+  if (taskType === "scenario_analysis") return "Сценарии и позиция Сбера в каждом при смене условий";
+  return "От управленческого решения к доказательствам";
+}
 
 export function ChatFlow({
   session,
@@ -256,6 +328,21 @@ export function ChatFlow({
 
   const selectedRegionProfile = regions.find((r) => r.id === regionId || r.name === region);
   const emptyRegionCard = Boolean(region) && !selectedRegionProfile;
+
+  // Интерактивный план материала (порядок + вкл/выкл + объём). Объём тянется
+  // из detailLevel формы — единый контрол живёт внутри карточки плана.
+  const plan = useMaterialPlan(taskType, detailLevel);
+
+  // Собирает materialPlan из текущего состояния плана и кладёт в форму ДО отправки.
+  const submitWithPlan = useCallback(() => {
+    form.setValue(
+      "materialPlan",
+      { blocks: plan.enabledOrdered, volume: plan.state.volume },
+      { shouldValidate: false },
+    );
+    return form.handleSubmit(submit)();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form, plan.enabledOrdered, plan.state.volume, submit]);
 
   async function handleBrief() {
     const phrase = briefText.trim();
@@ -404,19 +491,34 @@ export function ChatFlow({
         {atPlan && (
           <div className="ml-11 space-y-4">
             <AssistantBubbleInline>
-              Готово. Вот что соберу под эту задачу — объём можно поменять ниже.
+              Готово. Вот что соберу под эту задачу — включайте, выключайте и
+              меняйте порядок блоков; объём — ниже.
             </AssistantBubbleInline>
             <MaterialPlanCard
               taskType={taskType}
-              detailLevel={detailLevel}
-              urgency={urgency}
-              onDetail={(v) => form.setValue("detailLevel", v, { shouldValidate: false })}
+              plan={plan}
+              onVolume={(v) => form.setValue("detailLevel", v, { shouldValidate: false })}
+              readiness={computeReadiness({
+                isMeeting,
+                hasRegion: Boolean(region),
+                hasRegionProfile: Boolean(selectedRegionProfile),
+                hasMeetingWith: Boolean(form.watch("meetingWith")?.trim()),
+                hasFocus: Boolean(form.watch("focusTopic")?.trim()),
+                urgency,
+              })}
+              angle={computeAngle({
+                taskType,
+                isMeeting,
+                hasRegion: Boolean(region),
+                hasRegionProfile: Boolean(selectedRegionProfile),
+                urgency,
+              })}
             />
             <Button
               type="button"
               size="lg"
-              disabled={loading}
-              onClick={form.handleSubmit(submit)}
+              disabled={loading || plan.enabledOrdered.length === 0}
+              onClick={submitWithPlan}
               className="w-full"
             >
               {loading ? (
@@ -542,12 +644,13 @@ function MicButton({ voice }: { voice: ReturnType<typeof useVoiceInput> }) {
 
 // ── «Понял так»: редактируемые чипы ──────────────────────────────────────────
 
-type EditableField = "taskType" | "region" | "meetingWith" | "detailLevel";
+type EditableField = "taskType" | "region" | "meetingWith";
 
+/** Опции объёма — единый контрол живёт в карточке плана материала. */
 const detailOptions: { value: DetailLevel; label: string }[] = [
-  { value: "short", label: "Коротко" },
-  { value: "medium", label: "Средне" },
-  { value: "deep", label: "Глубоко" },
+  { value: "short", label: VOLUME_LABEL.short },
+  { value: "medium", label: VOLUME_LABEL.medium },
+  { value: "deep", label: VOLUME_LABEL.deep },
 ];
 
 function RecognitionCard({
@@ -557,12 +660,9 @@ function RecognitionCard({
   session: SessionApi;
   regions: ReturnType<typeof useRegions>["regions"];
 }) {
-  const { form, taskType, region, regionId, detailLevel, isMeeting, selectRegion } =
-    session;
+  const { form, taskType, region, regionId, isMeeting, selectRegion } = session;
   const meetingWith = form.watch("meetingWith");
   const [editing, setEditing] = useState<EditableField | null>(null);
-
-  const detailLabel = detailOptions.find((d) => d.value === detailLevel)?.label ?? "Средне";
 
   return (
     <div className="flex items-start gap-3">
@@ -639,33 +739,7 @@ function RecognitionCard({
               />
             </Chip>
           )}
-
-          {/* Объём */}
-          <Chip
-            label="Объём"
-            value={detailLabel}
-            open={editing === "detailLevel"}
-            onToggle={() => setEditing(editing === "detailLevel" ? null : "detailLevel")}
-          >
-            <div className="flex flex-col gap-1">
-              {detailOptions.map(({ value, label }) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => {
-                    form.setValue("detailLevel", value, { shouldValidate: false });
-                    setEditing(null);
-                  }}
-                  className={cn(
-                    "rounded-lg px-2.5 py-1.5 text-left text-sm transition hover:bg-muted",
-                    detailLevel === value && "bg-primary/10 text-primary",
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </Chip>
+          {/* Объём вынесен в единый контрол внутри «Плана материала» ниже. */}
         </div>
       </div>
     </div>
@@ -938,83 +1012,250 @@ function ClarifyPrompt({
   );
 }
 
-// ── План материала (диалоговый вариант) ──────────────────────────────────────
+// ── План материала (диалоговый вариант, интерактивный) ───────────────────────
+
+type Readiness = ReturnType<typeof computeReadiness>;
+type PlanApi = ReturnType<typeof useMaterialPlan>;
+
+/** Тег глубины блока под текущий объём (визуально и по смыслу различаются). */
+function depthTag(block: MaterialBlock, volume: DetailLevel, enabled: boolean): string {
+  if (!enabled) return "пропуск";
+  if (block.core) {
+    return volume === "deep" ? "полная" : volume === "short" ? "кратко" : "базовая";
+  }
+  return volume === "deep" ? "подробно" : volume === "short" ? "сжато" : "средне";
+}
 
 function MaterialPlanCard({
   taskType,
-  detailLevel,
-  urgency,
-  onDetail,
+  plan,
+  onVolume,
+  readiness,
+  angle,
 }: {
   taskType: TaskType;
-  detailLevel: DetailLevel;
-  urgency: UrgencyLevel;
-  onDetail: (v: DetailLevel) => void;
+  plan: PlanApi;
+  onVolume: (v: DetailLevel) => void;
+  readiness: Readiness;
+  angle: string;
 }) {
-  const blocks = materialPlan[taskType];
-  const coreCount = blocks.filter((b) => b.core).length;
+  const { state, toggle, move } = plan;
+  const registry = blocksForTask(taskType);
+  const byId = new Map(registry.map((b) => [b.id, b] as const));
+  // Блоки в текущем (перетаскиваемом) порядке.
+  const ordered = state.order
+    .map((id) => byId.get(id))
+    .filter((b): b is MaterialBlock => Boolean(b));
+  const enabledCount = ordered.filter((b) => state.enabled.has(b.id)).length;
+
+  // Индекс перетаскиваемой строки (HTML5 DnD, без внешних библиотек).
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
+
+  function onDrop(target: number) {
+    if (dragIndex !== null && dragIndex !== target) move(dragIndex, target);
+    setDragIndex(null);
+    setOverIndex(null);
+  }
+
+  const readyTone =
+    readiness.tone === "high"
+      ? { bar: "bg-emerald-500", text: "text-emerald-700 dark:text-emerald-400", note: "данных достаточно" }
+      : readiness.tone === "mid"
+        ? { bar: "bg-amber-500", text: "text-amber-700 dark:text-amber-500", note: "часть будет гипотезой" }
+        : { bar: "bg-amber-500", text: "text-amber-700 dark:text-amber-500", note: "многое будет гипотезой" };
 
   return (
-    <div className="rounded-2xl border p-3.5">
-      <div className="mb-2.5 flex items-baseline justify-between gap-2">
+    <div className="overflow-hidden rounded-2xl border">
+      {/* Заголовок */}
+      <div className="flex items-baseline justify-between gap-2 border-b bg-muted/20 px-3.5 py-2.5">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           План материала · {taskLabels[taskType]}
         </p>
         <span className="shrink-0 text-[11px] text-muted-foreground">
-          {coreCount} из {blocks.length} обязательных
+          {enabledCount} из {ordered.length} блоков
         </span>
       </div>
-      <ul className="space-y-1">
-        {blocks.map((block) => {
-          const status = resolveBlockStatus(block, detailLevel, urgency);
-          return (
-            <li
-              key={block.label}
-              className={cn(
-                "flex items-center justify-between gap-3 rounded-lg px-2.5 py-1.5 text-xs",
-                status === "compact" ? "text-muted-foreground/70" : "text-foreground",
-              )}
-            >
-              <span className="min-w-0 truncate">{block.label}</span>
-              <span
+
+      <div className="space-y-3.5 p-3.5">
+        {/* Индикатор готовности данных */}
+        <div
+          className={cn(
+            "rounded-xl border p-3",
+            readiness.tone === "high"
+              ? "border-emerald-500/25 bg-emerald-500/[0.05]"
+              : "border-amber-500/25 bg-amber-500/[0.06]",
+          )}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <span className={cn("inline-flex items-center gap-1.5 text-xs font-semibold", readyTone.text)}>
+              <GaugeCircle className="size-4" /> Готовность данных
+            </span>
+            <span className={cn("text-xs font-semibold tabular-nums", readyTone.text)}>
+              {readiness.percent}% · {readyTone.note}
+            </span>
+          </div>
+          <div className="mt-2 h-2 overflow-hidden rounded-full bg-foreground/10">
+            <div className={cn("h-full rounded-full transition-all", readyTone.bar)} style={{ width: `${readiness.percent}%` }} />
+          </div>
+          {readiness.reasons.length > 0 && (
+            <div className="mt-2.5 flex flex-wrap gap-1.5">
+              {readiness.reasons.map((reason) => (
+                <span
+                  key={reason}
+                  className="rounded-md border border-amber-500/30 bg-background px-1.5 py-0.5 text-[10.5px] font-medium text-amber-700 dark:text-amber-500"
+                >
+                  {reason}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Угол подачи */}
+        {angle && (
+          <div className="flex items-start gap-2 rounded-xl border border-blue-500/25 bg-blue-500/[0.05] px-3 py-2 text-xs font-medium leading-snug text-blue-700 dark:text-blue-400">
+            <Lightbulb className="mt-0.5 size-3.5 shrink-0" />
+            <span>
+              <span className="font-semibold">Угол подачи:</span> {angle}
+            </span>
+          </div>
+        )}
+
+        {/* Строки блоков: ручка перетаскивания + название + тег глубины + тумблер */}
+        <ul className="overflow-hidden rounded-xl border">
+          {ordered.map((block, index) => {
+            const on = state.enabled.has(block.id);
+            const isOver = overIndex === index && dragIndex !== null && dragIndex !== index;
+            return (
+              <li
+                key={block.id}
+                draggable
+                onDragStart={() => setDragIndex(index)}
+                onDragEnter={() => setOverIndex(index)}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => onDrop(index)}
+                onDragEnd={() => {
+                  setDragIndex(null);
+                  setOverIndex(null);
+                }}
                 className={cn(
-                  "shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
-                  status === "core"
-                    ? "bg-primary/10 text-primary"
-                    : status === "full"
-                      ? "bg-muted text-muted-foreground"
-                      : "border border-dashed text-muted-foreground/70",
+                  "flex items-center gap-2.5 px-3 py-2.5 transition",
+                  index > 0 && "border-t",
+                  !on && "bg-muted/40",
+                  isOver && "bg-primary/[0.06]",
+                  dragIndex === index && "opacity-60",
                 )}
               >
-                {status === "core" ? "обязательно" : status === "full" ? "подробно" : "сжато"}
-              </span>
-            </li>
-          );
-        })}
-      </ul>
+                <span
+                  className="shrink-0 cursor-grab text-muted-foreground/50 active:cursor-grabbing"
+                  aria-hidden
+                  title="Перетащите, чтобы изменить порядок"
+                >
+                  <GripVertical className="size-4" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className={cn("truncate text-[13px] font-medium leading-snug", !on && "text-muted-foreground")}>
+                    {block.label}
+                  </p>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
+                    {block.core && (
+                      <span className="rounded border border-primary/30 bg-primary/10 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-primary">
+                        ядро
+                      </span>
+                    )}
+                    {on
+                      ? block.hint && <span className="truncate">{block.hint}</span>
+                      : <span className="italic">исключён из материала</span>}
+                  </div>
+                </div>
+                <span
+                  className={cn(
+                    "shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
+                    on ? "text-muted-foreground" : "border-dashed text-muted-foreground/60",
+                  )}
+                >
+                  {depthTag(block, state.volume, on)}
+                </span>
+                <ToggleSwitch
+                  checked={on}
+                  disabled={block.core}
+                  onChange={() => toggle(block)}
+                  label={block.label}
+                />
+              </li>
+            );
+          })}
+        </ul>
 
-      {/* Инлайн-тумблер объёма */}
-      <div className="mt-3 flex items-center gap-2 border-t pt-3">
-        <span className="text-xs font-medium text-muted-foreground">Объём</span>
-        <div className="flex flex-1 gap-1.5">
-          {detailOptions.map(({ value, label }) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => onDetail(value)}
-              className={cn(
-                "flex-1 rounded-lg border px-2 py-1.5 text-center text-xs font-semibold transition",
-                detailLevel === value
-                  ? "border-primary bg-primary text-primary-foreground"
-                  : "hover:bg-muted/50",
-              )}
-            >
-              {label}
-            </button>
-          ))}
+        {/* Единый контрол объёма */}
+        <div className="border-t pt-3">
+          <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Объём материала
+          </p>
+          <div className="flex gap-1.5">
+            {detailOptions.map(({ value, label }) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => onVolume(value)}
+                className={cn(
+                  "flex-1 rounded-lg border px-2 py-2 text-center text-xs font-semibold transition",
+                  state.volume === value
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "hover:bg-muted/50",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+            {state.volume === "short"
+              ? "Коротко: только обязательные блоки, суть без деталей."
+              : state.volume === "medium"
+                ? "Средне: обязательные + ключевые ситуативные блоки."
+                : "Глубоко: все блоки с максимальной проработкой."}
+          </p>
         </div>
       </div>
     </div>
+  );
+}
+
+/** Компактный тумблер вкл/выкл (native button, доступный, без библиотек). */
+function ToggleSwitch({
+  checked,
+  disabled,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  disabled?: boolean;
+  onChange: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={`${label}: ${checked ? "включён" : "выключен"}`}
+      disabled={disabled}
+      onClick={onChange}
+      className={cn(
+        "relative h-[22px] w-[38px] shrink-0 rounded-full transition",
+        checked ? "bg-primary" : "bg-muted-foreground/30",
+        disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
+      )}
+    >
+      <span
+        className={cn(
+          "absolute top-0.5 size-[18px] rounded-full bg-background shadow-sm transition-all",
+          checked ? "left-[18px]" : "left-0.5",
+        )}
+      />
+    </button>
   );
 }
 
@@ -1105,6 +1346,18 @@ export function StepForm({
   }
 
   const selectedRegionProfile = regions.find((r) => r.id === regionId || r.name === region);
+
+  // Интерактивный план материала (тот же контрол, что и в диалоге).
+  const plan = useMaterialPlan(taskType, detailLevel);
+  const submitWithPlan = useCallback(() => {
+    form.setValue(
+      "materialPlan",
+      { blocks: plan.enabledOrdered, volume: plan.state.volume },
+      { shouldValidate: false },
+    );
+    return form.handleSubmit(submit)();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form, plan.enabledOrdered, plan.state.volume, submit]);
 
   return (
     <div className="space-y-4">
@@ -1277,16 +1530,7 @@ export function StepForm({
         {/* STEP 3: Details */}
         {currentStep === "Детали" && (
           <div className="space-y-4">
-            <Field label="Объём">
-              <div className="grid grid-cols-3 gap-2">
-                {(["short", "medium", "deep"] as const).map((v) => (
-                  <button type="button" key={v} onClick={() => form.setValue("detailLevel", v, { shouldValidate: true })}
-                    className={cn("rounded-xl border p-2.5 text-center text-xs font-semibold transition", detailLevel === v ? "border-primary bg-primary text-primary-foreground" : "hover:bg-muted/50")}>
-                    {v === "short" ? "Коротко" : v === "medium" ? "Средне" : "Глубоко"}
-                  </button>
-                ))}
-              </div>
-            </Field>
+            {/* Объём выбирается единым контролом внутри «Плана материала» ниже. */}
 
             {needsHorizon && (
               <Field label="Горизонт">
@@ -1336,7 +1580,26 @@ export function StepForm({
               </div>
             </div>
 
-            <StepMaterialPlan taskType={taskType} detailLevel={detailLevel} urgency={urgency} />
+            <MaterialPlanCard
+              taskType={taskType}
+              plan={plan}
+              onVolume={(v) => form.setValue("detailLevel", v, { shouldValidate: false })}
+              readiness={computeReadiness({
+                isMeeting,
+                hasRegion: Boolean(region),
+                hasRegionProfile: Boolean(selectedRegionProfile),
+                hasMeetingWith: Boolean(form.watch("meetingWith")?.trim()),
+                hasFocus: Boolean(form.watch("focusTopic")?.trim()),
+                urgency,
+              })}
+              angle={computeAngle({
+                taskType,
+                isMeeting,
+                hasRegion: Boolean(region),
+                hasRegionProfile: Boolean(selectedRegionProfile),
+                urgency,
+              })}
+            />
           </div>
         )}
 
@@ -1352,7 +1615,7 @@ export function StepForm({
               Далее <ArrowRight className="size-4" />
             </button>
           ) : (
-            <button type="button" disabled={loading} onClick={form.handleSubmit(submit)}
+            <button type="button" disabled={loading || plan.enabledOrdered.length === 0} onClick={submitWithPlan}
               className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-medium text-primary-foreground disabled:opacity-50 active:bg-primary/90">
               {loading ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
               Создать
@@ -1380,64 +1643,6 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
     <div className="mb-1.5 flex items-baseline justify-between gap-3 last:mb-0">
       <span className="shrink-0 text-xs text-muted-foreground">{label}</span>
       <span className="text-right text-xs font-medium leading-snug">{value}</span>
-    </div>
-  );
-}
-
-/**
- * Список блоков материала для ручного режима (идентичен диалоговому, но без
- * инлайн-тумблера объёма — в ручном режиме объём меняется полем «Объём» выше).
- */
-function StepMaterialPlan({
-  taskType,
-  detailLevel,
-  urgency,
-}: {
-  taskType: TaskType;
-  detailLevel: DetailLevel;
-  urgency: UrgencyLevel;
-}) {
-  const blocks = materialPlan[taskType];
-  const coreCount = blocks.filter((b) => b.core).length;
-
-  return (
-    <div className="rounded-2xl border p-3.5">
-      <div className="mb-2.5 flex items-baseline justify-between gap-2">
-        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          План материала
-        </p>
-        <span className="shrink-0 text-[11px] text-muted-foreground">
-          {coreCount} из {blocks.length} обязательных
-        </span>
-      </div>
-      <ul className="space-y-1">
-        {blocks.map((block) => {
-          const status = resolveBlockStatus(block, detailLevel, urgency);
-          return (
-            <li
-              key={block.label}
-              className={cn(
-                "flex items-center justify-between gap-3 rounded-lg px-2.5 py-1.5 text-xs",
-                status === "compact" ? "text-muted-foreground/70" : "text-foreground",
-              )}
-            >
-              <span className="min-w-0 truncate">{block.label}</span>
-              <span
-                className={cn(
-                  "shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide",
-                  status === "core"
-                    ? "bg-primary/10 text-primary"
-                    : status === "full"
-                      ? "bg-muted text-muted-foreground"
-                      : "border border-dashed text-muted-foreground/70",
-                )}
-              >
-                {status === "core" ? "обязательно" : status === "full" ? "подробно" : "сжато"}
-              </span>
-            </li>
-          );
-        })}
-      </ul>
     </div>
   );
 }

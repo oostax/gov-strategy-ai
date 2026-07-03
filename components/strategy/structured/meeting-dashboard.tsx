@@ -155,6 +155,20 @@ function SectionHeader({
 
 const nonEmpty = (v: unknown): v is string => typeof v === "string" && v.trim().length > 0;
 
+// Порядок секций встречи по умолчанию (совпадает с id реестра material-plan).
+// Используется, если у документа нет sectionOrder (старые сессии / без плана).
+const DEFAULT_MEETING_ORDER = [
+  "ministry",
+  "dossier",
+  "participants",
+  "theses",
+  "sber",
+  "agenda",
+  "objections",
+  "after",
+  "sources",
+];
+
 export function MeetingDashboard({ data }: { data: MeetingOutput }) {
   const portrait = data.ministryPortrait;
   const hasPortrait =
@@ -173,6 +187,72 @@ export function MeetingDashboard({ data }: { data: MeetingOutput }) {
   const agenda = (data.agenda ?? []).filter((b) => nonEmpty(b.topic) || nonEmpty(b.sberSays));
   const objections = (data.objections ?? []).filter((o) => nonEmpty(o.objection));
 
+  // Секции по id реестра: рендерятся в порядке плана (data.sectionOrder), с
+  // пропуском отключённых/пустых. Fallback — DEFAULT_MEETING_ORDER.
+  const sectionById: Record<string, ReactNode> = {
+    ministry: hasPortrait ? (
+      <div key="ministry" id="ministry" className="scroll-mt-56">
+        <MinistryPortraitSection portrait={portrait} />
+      </div>
+    ) : null,
+    dossier: hasDossier ? (
+      <div key="dossier" id="lpr" className="scroll-mt-56">
+        <LprSection dossier={dossier} />
+      </div>
+    ) : null,
+    participants: participants.length > 0 ? (
+      <div key="participants" id="players" className="scroll-mt-56">
+        <ParticipantsSection participants={participants} />
+      </div>
+    ) : null,
+    theses: theses.length > 0 ? (
+      <div key="theses" id="theses" className="scroll-mt-56">
+        <ThesesSection theses={theses} />
+      </div>
+    ) : null,
+    sber: (data.sberActions?.length ?? 0) > 0 ? (
+      <div key="sber" id="sber-actions" className="scroll-mt-56">
+        <SberActionPanel actions={data.sberActions ?? []} />
+      </div>
+    ) : null,
+    agenda: agenda.length > 0 ? (
+      <div key="agenda" id="agenda" className="scroll-mt-56">
+        <AgendaSection agenda={agenda} />
+      </div>
+    ) : null,
+    objections: objections.length > 0 ? (
+      <div key="objections" id="objections" className="scroll-mt-56">
+        <ObjectionsSection objections={objections} />
+      </div>
+    ) : null,
+    after: (
+      <div key="after" id="follow-up" className="scroll-mt-56">
+        <AfterMeetingSection data={data} />
+      </div>
+    ),
+    sources: (
+      <div key="sources" id="sources" className="scroll-mt-56 space-y-3">
+        <TierCounters data={data} />
+        <SourcesFooter sources={data.sources ?? []} hypotheses={data.hypotheses ?? []} />
+      </div>
+    ),
+  };
+
+  // Если план задан — рендерим ТОЛЬКО перечисленные секции в их порядке;
+  // недостающие в плане (напр. sources для совместимости) дописываем в хвост.
+  const planned = (data.sectionOrder ?? []).filter((k) => k in sectionById);
+  const order: string[] = [];
+  const push = (k: string) => {
+    if (!order.includes(k)) order.push(k);
+  };
+  if (planned.length > 0) {
+    planned.forEach(push);
+    // Источники всегда показываем, даже если не были явно в плане.
+    push("sources");
+  } else {
+    DEFAULT_MEETING_ORDER.forEach(push);
+  }
+
   return (
     <div className="space-y-5">
       {/* Hero: цель + лестница запросов + тезис/предложение/артефакт */}
@@ -183,67 +263,13 @@ export function MeetingDashboard({ data }: { data: MeetingOutput }) {
       {/* Легенда тиеров источников */}
       <TierLegend />
 
-      {/* ЯДРО — портрет ведомства и повестки */}
-      {hasPortrait && (
-        <div id="ministry" className="scroll-mt-56">
-          <MinistryPortraitSection portrait={portrait} />
-        </div>
-      )}
-
-      {/* ЛПР — тиерный слой */}
-      {hasDossier && (
-        <div id="lpr" className="scroll-mt-56">
-          <LprSection dossier={dossier} />
-        </div>
-      )}
-
-      {/* Карта участников */}
-      {participants.length > 0 && (
-        <div id="players" className="scroll-mt-56">
-          <ParticipantsSection participants={participants} />
-        </div>
-      )}
-
-      {/* Тезисы под повестку ЛПР */}
-      {theses.length > 0 && (
-        <div id="theses" className="scroll-mt-56">
-          <ThesesSection theses={theses} />
-        </div>
-      )}
-
-      {/* Участие Сбера */}
-      <div id="sber-actions" className="scroll-mt-56">
-        <SberActionPanel actions={data.sberActions ?? []} />
-      </div>
-
+      {/* Визуалы — обрамление, вне управляемого планом порядка */}
       <div id="visuals" className="scroll-mt-56">
         <VisualsSection visuals={data.visuals ?? []} />
       </div>
 
-      {/* Сценарий встречи */}
-      {agenda.length > 0 && (
-        <div id="agenda" className="scroll-mt-56">
-          <AgendaSection agenda={agenda} />
-        </div>
-      )}
-
-      {/* Возражения */}
-      {objections.length > 0 && (
-        <div id="objections" className="scroll-mt-56">
-          <ObjectionsSection objections={objections} />
-        </div>
-      )}
-
-      {/* После встречи */}
-      <div id="follow-up" className="scroll-mt-56">
-        <AfterMeetingSection data={data} />
-      </div>
-
-      {/* Источники + счётчики по тиерам */}
-      <div id="sources" className="scroll-mt-56 space-y-3">
-        <TierCounters data={data} />
-        <SourcesFooter sources={data.sources ?? []} hypotheses={data.hypotheses ?? []} />
-      </div>
+      {/* Секции по плану материала (порядок + пропуск отключённых/пустых) */}
+      {order.map((key) => sectionById[key]).filter(Boolean)}
     </div>
   );
 }

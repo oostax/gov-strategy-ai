@@ -51,6 +51,38 @@ const PLANNER_PROMPT = `Ты — планировщик региональног
 
 Без пояснений, без разметки, только JSON.`;
 
+/**
+ * Порядок «классических» блоков из «Плана материала» руководителя, если он задан.
+ * id блоков region-реестра совпадают с BlockKind. Ядро региона (budget/industries/
+ * priorities/scenarios) сохраняем всегда — это аналитический костяк и он нужен
+ * гейту готовности сборки; competition/stakeholders включаются по выбору.
+ * Возвращает undefined, если плана нет — тогда работает планировщик модели.
+ */
+function planOrderFromMaterialPlan(session: SessionProfile): BlockKind[] | undefined {
+  const blocks = session.materialPlan?.blocks;
+  if (!Array.isArray(blocks) || blocks.length === 0) return undefined;
+  const isClassic = (v: string): v is BlockKind =>
+    (CLASSIC_SECTION_KINDS as readonly string[]).includes(v);
+  const coreClassic: BlockKind[] = ["budget", "industries", "priorities", "scenarios"];
+  // Порядок из плана (только валидные классические ключи), без дублей.
+  const ordered: BlockKind[] = [];
+  const seen = new Set<BlockKind>();
+  for (const id of blocks) {
+    if (isClassic(id) && !seen.has(id)) {
+      seen.add(id);
+      ordered.push(id);
+    }
+  }
+  // Ядро гарантированно присутствует (в хвост, если не выбрано пользователем).
+  for (const kind of coreClassic) {
+    if (!seen.has(kind)) {
+      seen.add(kind);
+      ordered.push(kind);
+    }
+  }
+  return ordered;
+}
+
 export async function planRegionBlocks(
   session: SessionProfile,
   region: RegionProfile | null,
@@ -134,7 +166,10 @@ export async function planRegionBlocks(
   for (const kind of coreClassic) {
     if (!seen.has(kind)) { seen.add(kind); sectionOrder.push(kind); }
   }
-  const finalOrder: BlockKind[] = sectionOrder.length ? sectionOrder : [...CLASSIC_SECTION_KINDS];
+  // «План материала» руководителя ПЕРЕОПРЕДЕЛЯЕТ порядок/состав, если задан.
+  const planOrder = planOrderFromMaterialPlan(session);
+  const finalOrder: BlockKind[] =
+    planOrder ?? (sectionOrder.length ? sectionOrder : [...CLASSIC_SECTION_KINDS]);
 
   // 2) Набор блоков для генерации: summary + выбранные классические.
   const genSet = new Set<BlockKind>(["summary", ...finalOrder]);
@@ -178,18 +213,22 @@ export function fallbackRegionBlocksPlan(
 ): RegionBlocksPlan {
   const regionName = canonicalRegionName(region?.name || session.region);
   const focusTopic = session.focusTopic || "анализ региона";
+  // «План материала» руководителя переопределяет состав/порядок и в фолбэке.
+  const planOrder = planOrderFromMaterialPlan(session);
+  const finalOrder = planOrder ?? [...CLASSIC_SECTION_KINDS];
+  const genSet = new Set<BlockKind>(["summary", ...finalOrder]);
   return {
     sessionId: session.id,
     region: regionName,
     focusTopic,
-    blocks: BLOCK_ORDER.map((kind) => ({
+    blocks: BLOCK_ORDER.filter((kind) => genSet.has(kind)).map((kind) => ({
       kind,
       label: BLOCK_LABELS[kind],
       searchQueries: normalizeBlockQueries(kind, [], regionName).slice(0, 5),
       dependsOn: BLOCK_DEPENDENCIES[kind] || [],
     })),
     createdAt: new Date().toISOString(),
-    sectionOrder: [...CLASSIC_SECTION_KINDS],
+    sectionOrder: finalOrder,
   };
 }
 

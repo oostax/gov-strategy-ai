@@ -28,6 +28,7 @@ import {
   regionAnalysisContract,
 } from "@/lib/prompts/structured-contract";
 import { roleLabels, taskLabels } from "@/lib/schemas/session";
+import { buildMaterialPlanDirective } from "@/lib/schemas/material-plan";
 import { formatSberProjectsForPrompt, type SberGovProject } from "@/lib/storage/sber-projects";
 import { jsonrepair } from "jsonrepair";
 
@@ -149,12 +150,26 @@ function structuredDataCandidate(value: unknown): unknown {
   return value;
 }
 
+/**
+ * Опции валидации. `enabledBlocks` — множество id включённых блоков из «Плана
+ * материала». Если задано, обязательными считаются ТОЛЬКО включённые секции:
+ * отключённый пользователем блок (напр. agenda / competition) не флагается как
+ * ошибка. Если не задано — прежнее строгое поведение (полная схема).
+ */
+type UsableOptions = { requireSources?: boolean; enabledBlocks?: Set<string> };
+
+/** Блок обязателен, если план не задан ИЛИ его id есть среди включённых. */
+function blockRequired(enabled: Set<string> | undefined, id: string): boolean {
+  return !enabled || enabled.has(id);
+}
+
 function isUsableStructuredData(
   kind: TypedOutput["kind"],
   value: unknown,
-  options: { requireSources?: boolean } = {},
+  options: UsableOptions = {},
 ): boolean {
   const requireSources = options.requireSources ?? true;
+  const enabled = options.enabledBlocks;
   value = structuredDataCandidate(value);
   if (!isRecord(value)) return false;
   if ("score" in value || "problems" in value) return false;
@@ -163,21 +178,29 @@ function isUsableStructuredData(
     const regionSummary = value.regionSummary;
     const budgetLandscape = value.budgetLandscape;
     const strategicPriorities = value.strategicPriorities;
+    // regionSummary — базовое поле, требуется всегда. Остальные секции —
+    // только если включены в плане (id совпадают с ключами sectionOrder).
+    const okIndustries =
+      !blockRequired(enabled, "industries") ||
+      (Array.isArray(value.industryBreakdown) && value.industryBreakdown.length > 0);
+    const okScenarios =
+      !blockRequired(enabled, "scenarios") ||
+      (Array.isArray(value.regionalScenarios) && value.regionalScenarios.length > 0);
+    const okCompetition =
+      !blockRequired(enabled, "competition") ||
+      (Array.isArray(value.competitiveLandscape) && value.competitiveLandscape.length > 0);
+    const okPriorities =
+      !blockRequired(enabled, "priorities") ||
+      (isRecord(strategicPriorities) && Array.isArray(strategicPriorities.confirmed));
     return (
       isRecord(regionSummary) &&
       typeof regionSummary.name === "string" &&
       regionSummary.name.trim().length > 0 &&
       isRecord(budgetLandscape) &&
-      Array.isArray(value.industryBreakdown) &&
-      value.industryBreakdown.length > 0 &&
-      Array.isArray(value.regionalScenarios) &&
-      value.regionalScenarios.length > 0 &&
-      Array.isArray(value.competitiveLandscape) &&
-      value.competitiveLandscape.length > 0 &&
-      Array.isArray(value.entryPoints) &&
-      value.entryPoints.length > 0 &&
-      isRecord(strategicPriorities) &&
-      Array.isArray(strategicPriorities.confirmed) &&
+      okIndustries &&
+      okScenarios &&
+      okCompetition &&
+      okPriorities &&
       (!requireSources || (Array.isArray(value.sources) && value.sources.length > 0))
     );
   }
@@ -185,19 +208,21 @@ function isUsableStructuredData(
   if (kind === "meeting") {
     const agenda = value.agenda;
     const objections = value.objections;
-    // Строго: цель непустая, а сценарий не только присутствует, но и ЗАПОЛНЕН —
-    // у каждого блока непустые topic и sberSays. Это устраняет баг пустого сценария.
+    // Сценарий (agenda) обязателен и должен быть ЗАПОЛНЕН — но только если блок
+    // включён в плане. Это устраняет баг пустого сценария, не ломая случай,
+    // когда руководитель осознанно отключил «Сценарий встречи».
     const agendaFilled =
-      Array.isArray(agenda) &&
-      agenda.length > 0 &&
-      agenda.every(
-        (block) =>
-          isRecord(block) &&
-          typeof block.topic === "string" &&
-          block.topic.trim().length > 0 &&
-          typeof block.sberSays === "string" &&
-          block.sberSays.trim().length > 0,
-      );
+      !blockRequired(enabled, "agenda") ||
+      (Array.isArray(agenda) &&
+        agenda.length > 0 &&
+        agenda.every(
+          (block) =>
+            isRecord(block) &&
+            typeof block.topic === "string" &&
+            block.topic.trim().length > 0 &&
+            typeof block.sberSays === "string" &&
+            block.sberSays.trim().length > 0,
+        ));
     // Возражения если присутствуют — не должны быть пустыми объектами.
     const objectionsOk =
       !Array.isArray(objections) ||
@@ -232,7 +257,7 @@ function isUsableStructuredData(
 function assertUsableStructuredData(
   kind: TypedOutput["kind"],
   value: unknown,
-  options: { requireSources?: boolean } = {},
+  options: UsableOptions = {},
 ): asserts value is object {
   if (!isUsableStructuredData(kind, value, options)) {
     throw new Error(
@@ -244,25 +269,27 @@ function assertUsableStructuredData(
 function describeStructuredDataIssues(
   kind: TypedOutput["kind"],
   value: unknown,
-  options: { requireSources?: boolean } = {},
+  options: UsableOptions = {},
 ): string[] {
   const requireSources = options.requireSources ?? true;
+  const enabled = options.enabledBlocks;
   const data = structuredDataCandidate(value);
   if (!isRecord(data)) return ["not an object"];
   const issues: string[] = [];
   if ("score" in data || "problems" in data) issues.push("review wrapper returned");
   if (kind === "region") {
     if (!isRecord(data.regionSummary) || typeof data.regionSummary.name !== "string") issues.push("regionSummary missing");
-    if (!Array.isArray(data.industryBreakdown) || data.industryBreakdown.length === 0) issues.push("industryBreakdown empty");
-    if (!Array.isArray(data.regionalScenarios) || data.regionalScenarios.length === 0) issues.push("regionalScenarios empty");
-    if (!Array.isArray(data.competitiveLandscape) || data.competitiveLandscape.length === 0) issues.push("competitiveLandscape empty");
-    if (!Array.isArray(data.entryPoints) || data.entryPoints.length === 0) issues.push("entryPoints empty");
-    if (!isRecord(data.strategicPriorities) || !Array.isArray(data.strategicPriorities.confirmed)) issues.push("strategicPriorities missing");
+    if (blockRequired(enabled, "industries") && (!Array.isArray(data.industryBreakdown) || data.industryBreakdown.length === 0)) issues.push("industryBreakdown empty");
+    if (blockRequired(enabled, "scenarios") && (!Array.isArray(data.regionalScenarios) || data.regionalScenarios.length === 0)) issues.push("regionalScenarios empty");
+    if (blockRequired(enabled, "competition") && (!Array.isArray(data.competitiveLandscape) || data.competitiveLandscape.length === 0)) issues.push("competitiveLandscape empty");
+    if (blockRequired(enabled, "priorities") && (!isRecord(data.strategicPriorities) || !Array.isArray(data.strategicPriorities.confirmed))) issues.push("strategicPriorities missing");
     if (requireSources && (!Array.isArray(data.sources) || data.sources.length === 0)) issues.push("sources empty");
   }
   if (kind === "meeting") {
     if (typeof data.meetingGoal !== "string" || !data.meetingGoal.trim()) issues.push("meetingGoal empty");
-    if (!Array.isArray(data.agenda) || data.agenda.length === 0) {
+    if (!blockRequired(enabled, "agenda")) {
+      // Сценарий отключён в плане — отсутствие agenda не ошибка.
+    } else if (!Array.isArray(data.agenda) || data.agenda.length === 0) {
       issues.push("agenda empty");
     } else if (
       !data.agenda.every(
@@ -334,6 +361,7 @@ async function repairStructuredShape({
   webEvidence,
   evidencePack,
   blueprint,
+  enabledBlocks,
 }: {
   candidate: unknown;
   contract: string;
@@ -342,9 +370,11 @@ async function repairStructuredShape({
   webEvidence: string;
   evidencePack: string;
   blueprint: string;
+  enabledBlocks?: Set<string>;
 }): Promise<unknown> {
   if (kind === "meeting") candidate = sanitizeMeetingShape(candidate);
-  if (isUsableStructuredData(kind, candidate, { requireSources: false })) return structuredDataCandidate(candidate);
+  if (isUsableStructuredData(kind, candidate, { requireSources: false, enabledBlocks }))
+    return structuredDataCandidate(candidate);
 
   const raw = await callLLM({
     messages: [
@@ -402,7 +432,7 @@ async function repairStructuredShape({
   });
 
   const repaired = kind === "meeting" ? sanitizeMeetingShape(tryParseJson(raw)) : tryParseJson(raw);
-  assertUsableStructuredData(kind, repaired, { requireSources: false });
+  assertUsableStructuredData(kind, repaired, { requireSources: false, enabledBlocks });
   return structuredDataCandidate(repaired);
 }
 
@@ -634,6 +664,7 @@ async function reviewAndReviseStructured({
   webEvidence,
   blueprint,
   evidencePack,
+  enabledBlocks,
 }: {
   parsed: unknown;
   contract: string;
@@ -642,6 +673,7 @@ async function reviewAndReviseStructured({
   webEvidence: string;
   blueprint: string;
   evidencePack: string;
+  enabledBlocks?: Set<string>;
 }): Promise<unknown> {
   const raw = await callLLM({
     messages: [
@@ -726,11 +758,11 @@ async function reviewAndReviseStructured({
       responseFormat: "json_object",
     });
     const secondPass = tryParseJson(secondRaw);
-    if (isUsableStructuredData(kind, secondPass, { requireSources: false })) return secondPass;
-    if (isUsableStructuredData(kind, revised, { requireSources: false })) return revised;
+    if (isUsableStructuredData(kind, secondPass, { requireSources: false, enabledBlocks })) return secondPass;
+    if (isUsableStructuredData(kind, revised, { requireSources: false, enabledBlocks })) return revised;
     return parsed;
   }
-  if (!isUsableStructuredData(kind, revised, { requireSources: false })) return parsed;
+  if (!isUsableStructuredData(kind, revised, { requireSources: false, enabledBlocks })) return parsed;
   return revised;
 }
 
@@ -782,6 +814,18 @@ export async function generateStructured(
   const contract = getContract(session.taskType);
   const kind = getKind(session.taskType);
   const blueprint = getDocumentBlueprint(session);
+  // Директива состава/порядка/объёма блоков из «Плана материала» (если задан).
+  const materialPlanDirective = buildMaterialPlanDirective(
+    session.taskType,
+    session.materialPlan,
+  );
+  // Множество включённых блоков — ослабляет валидацию: отключённые пользователем
+  // секции не считаются ошибкой. undefined = план не задан → строгая валидация.
+  const planBlockList = session.materialPlan?.blocks;
+  const enabledBlocks =
+    Array.isArray(planBlockList) && planBlockList.length > 0
+      ? new Set(planBlockList)
+      : undefined;
   onProgress?.(30, "Извлечение подтверждённых фактов из источников");
   const evidencePack = await buildEvidencePack({ session, webEvidence, memories });
   const formattedEvidencePack = formatEvidencePack(evidencePack);
@@ -818,8 +862,12 @@ export async function generateStructured(
     "Не выдумывай внутренние доли Сбера, количество клиентов, количество предприятий и точные планы вроде '50 компаний', если это не было дано пользователем или источником.",
     "Не выдумывай размер пилота: без источника не пиши '5 объектов', '10 предприятий', '20 площадок'. Используй формулировки 'пилотная группа', 'перечень приоритетных объектов', 'первый контур участников'.",
     "Не предлагай сокращение штата.",
+    // Состав/порядок/объём блоков из «Плана материала» руководителя (если задан).
+    materialPlanDirective,
     contract,
-  ].join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
   const userMessage = [
     `Профиль сессии:`,
@@ -876,6 +924,7 @@ export async function generateStructured(
     webEvidence,
     blueprint,
     evidencePack: formattedEvidencePack,
+    enabledBlocks,
   });
   onProgress?.(55, "Ревизия и проверка качества");
   const reviewed = await reviewAndReviseStructured({
@@ -886,6 +935,7 @@ export async function generateStructured(
     webEvidence,
     blueprint,
     evidencePack: formattedEvidencePack,
+    enabledBlocks,
   }).catch((error) => {
     console.warn(`[structured] review step skipped: ${error instanceof Error ? error.message : error}`);
     return parsed;
@@ -899,6 +949,7 @@ export async function generateStructured(
     webEvidence,
     blueprint,
     evidencePack: formattedEvidencePack,
+    enabledBlocks,
   });
 
   const guarded = guardSourcesAndEvidence({
@@ -909,6 +960,16 @@ export async function generateStructured(
   });
   const cleaned = guardRegionPlaceholders(kind, guarded);
 
-  assertUsableStructuredData(kind, cleaned, { requireSources: false });
+  assertUsableStructuredData(kind, cleaned, { requireSources: false, enabledBlocks });
+
+  // Прокидываем порядок/состав блоков из плана в вывод, чтобы дашборд рендерил
+  // секции в выбранном порядке и пропускал отключённые. Для meeting и region
+  // (region single-shot fallback; основной путь региона — блочный orchestrator).
+  if (enabledBlocks && planBlockList && isRecord(cleaned)) {
+    if (kind === "meeting" || kind === "region") {
+      (cleaned as Record<string, unknown>).sectionOrder = planBlockList;
+    }
+  }
+
   return { kind, data: cleaned } as TypedOutput;
 }
