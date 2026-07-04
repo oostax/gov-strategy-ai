@@ -2,6 +2,18 @@ import type { StakeholdersBlockOutput } from "../types";
 import type { BlockDeps } from "../types";
 import type { RegionStakeholder } from "@/lib/schemas/structured-output";
 import { prepareBlockSources, callBlockLLM, parseBlockJson, refineByAgentInstructions, normalizeHypotheses, buildContextPreamble, pickString } from "./base";
+import { fetchWikiFacts } from "@/lib/integrations/open-data-retrieval";
+
+/** Ключевые слова для вытяжки руководства региона из статьи Википедии. */
+const OFFICIALS_WIKI_KEYWORDS = [
+  "Губернатор",
+  "Глава администрации",
+  "Глава Республики",
+  "Председатель Правительства",
+  "председатель правительства",
+  "вице-губернатор",
+  "мэр",
+];
 
 const SYSTEM_PROMPT = `Ты — аналитик по региональным ЛПР. Составь карту ключевых лиц, принимающих решения в регионе.
 
@@ -53,10 +65,20 @@ export async function generateStakeholdersBlock(
     { kind: "stakeholders" },
   );
 
+  // Губернатор и ключевые руководители надёжно есть в статье Википедии региона
+  // (инфобокс/вступление). Тянем это отдельно, чтобы состав руководства не
+  // «плавал» между прогонами (иначе reasoning-модель то называет губернатора,
+  // то возвращает пусто). Живой источник, не мок.
+  const wikiOfficials = await fetchWikiFacts(deps.region, OFFICIALS_WIKI_KEYWORDS, 2200);
+  const officialsFacts = wikiOfficials
+    ? `Справочные факты о руководстве региона (из статьи Википедии):\n${wikiOfficials.snippet}\n\n`
+    : "";
+
   const contextBlock = [
     `Регион: ${deps.region}`,
     `Тема: ${deps.focusTopic}`,
     "",
+    officialsFacts,
     buildContextPreamble(deps),
     "",
     `Источники:\n${webEvidence}`,
@@ -83,9 +105,17 @@ export async function generateStakeholdersBlock(
     stakeholderMap = await salvageStakeholders(deps, contextBlock);
   }
 
+  const wikiSource = wikiOfficials
+    ? [{ title: wikiOfficials.title, url: wikiOfficials.url, excerpt: wikiOfficials.snippet.slice(0, 220), isVerified: true }]
+    : [];
+
   return {
     stakeholderMap: stakeholderMap.slice(0, 6),
-    sources: [...(Array.isArray(parsed.sources) ? (parsed.sources as StakeholdersBlockOutput["sources"]) : []), ...sources],
+    sources: [
+      ...(Array.isArray(parsed.sources) ? (parsed.sources as StakeholdersBlockOutput["sources"]) : []),
+      ...wikiSource,
+      ...sources,
+    ],
     hypotheses: normalizeHypotheses(parsed.hypotheses),
   };
 }
