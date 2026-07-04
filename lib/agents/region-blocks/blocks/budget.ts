@@ -1,7 +1,22 @@
 import type { BudgetBlockOutput } from "../types";
 import type { BlockDeps } from "../types";
+import type { Source } from "@/lib/schemas/structured-output";
 import { prepareBlockSources, callBlockLLM, parseBlockJson, hasUsefulText, refineByAgentInstructions, normalizeHypotheses, buildContextPreamble } from "./base";
+import { fetchWikiFacts } from "@/lib/integrations/open-data-retrieval";
 import { logBlockEvent } from "../logger";
+
+/** Ключевые слова для вытяжки бюджетно-экономических пассажей из статьи Википедии. */
+const BUDGET_WIKI_KEYWORDS = [
+  "доходы бюджета",
+  "расходы бюджета",
+  "консолидированн",
+  "бюджет",
+  "ВРП",
+  "валовой региональный",
+  "дефицит",
+  "профицит",
+  "млрд р",
+];
 
 const SYSTEM_PROMPT = `Ты — бюджетный аналитик. Составь детальный бюджетный ландшафт региона.
 
@@ -45,6 +60,21 @@ export async function generateBudgetBlock(
     { kind: "budget" },
   );
 
+  // Реальные бюджетные цифры (доходы/расходы/ВРП) обычно есть только в ТЕЛЕ
+  // статьи Википедии, а не во вступлении и не на генерик-страницах новостей.
+  // Тянем тематическую вытяжку и ставим её первой — это живой источник, не мок.
+  const wikiFacts = await fetchWikiFacts(deps.region, BUDGET_WIKI_KEYWORDS, 3500);
+  if (wikiFacts) {
+    webEvidence = `${wikiFacts.snippet}\n\n${webEvidence}`;
+    const wikiSource: Source = {
+      title: wikiFacts.title,
+      url: wikiFacts.url,
+      excerpt: wikiFacts.snippet.slice(0, 220),
+      isVerified: true,
+    };
+    sources = [wikiSource, ...sources];
+  }
+
   let userMessage = buildBudgetUserMessage(deps, webEvidence);
   let raw = await callBlockLLM(SYSTEM_PROMPT, userMessage, deps.agentInstructions, { sessionId: deps.session.id, runId: deps.runId, label: "budget" });
   let parsed = parseBlockJson(raw) as BudgetBlockOutput;
@@ -68,6 +98,7 @@ export async function generateBudgetBlock(
       ],
       { kind: "budget", skipCache: true },
     ));
+    if (wikiFacts) webEvidence = `${wikiFacts.snippet}\n\n${webEvidence}`;
     userMessage = buildBudgetUserMessage(deps, webEvidence);
     raw = await callBlockLLM(SYSTEM_PROMPT, userMessage, deps.agentInstructions, { sessionId: deps.session.id, runId: deps.runId, label: "budget_fallback" });
     parsed = parseBlockJson(raw) as BudgetBlockOutput;

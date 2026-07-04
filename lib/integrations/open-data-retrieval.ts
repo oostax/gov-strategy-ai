@@ -153,6 +153,95 @@ export async function searchWikipedia(region: string): Promise<WebEvidence[]> {
   return toWebEvidence(results);
 }
 
+/**
+ * Достаёт из ПОЛНОЙ статьи Википедии региона тематические пассажи (бюджет,
+ * ВРП, экономика, отрасли). Нужна, потому что summary — это лишь вступление
+ * (география/население), а бюджетные цифры лежат глубоко в теле статьи и
+ * обрезаются стандартным лимитом evidence. Возвращает WebEvidence с фактами,
+ * пригодными для прямой подстановки в промпт блока (budget/industries).
+ * Живой источник, без хардкода: работает для любого региона.
+ */
+export async function fetchWikiFacts(
+  region: string,
+  keywords: string[],
+  maxChars = 3500,
+): Promise<WebEvidence | null> {
+  try {
+    // 1) Каноничный заголовок статьи через search API (иначе — имя региона).
+    let title = region;
+    try {
+      const searchUrl = `https://ru.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(
+        region,
+      )}&format=json&origin=*&srlimit=1`;
+      const sres = await fetch(searchUrl, { headers: { "User-Agent": BROWSER_UA }, signal: AbortSignal.timeout(10000) });
+      if (sres.ok) {
+        const sdata = (await sres.json()) as { query?: { search?: Array<{ title: string }> } };
+        title = sdata.query?.search?.[0]?.title || region;
+      }
+    } catch {
+      /* оставляем имя региона */
+    }
+
+    // 2) Полный текст статьи через Jina (без 12k-обрезки jinaReader).
+    const wikiUrl = `https://ru.wikipedia.org/wiki/${encodeURIComponent(title.replace(/\s/g, "_"))}`;
+    const res = await fetch(`https://r.jina.ai/${wikiUrl}`, {
+      headers: { "User-Agent": BROWSER_UA },
+      signal: AbortSignal.timeout(25000),
+    });
+    if (!res.ok) return null;
+    const full = await res.text();
+    if (full.length < 200) return null;
+
+    // 3) Пассажи вокруг ключевых слов (до 2 вхождений на слово), дедуп, лимит.
+    const lower = full.toLowerCase();
+    const picks: string[] = [];
+    const seen = new Set<string>();
+    for (const kw of keywords) {
+      const needle = kw.toLowerCase();
+      let from = 0;
+      for (let n = 0; n < 2; n++) {
+        const idx = lower.indexOf(needle, from);
+        if (idx < 0) break;
+        const start = Math.max(0, idx - 160);
+        const end = Math.min(full.length, idx + 340);
+        // Чистим markdown-ссылки/сноски Jina и лишние пробелы.
+        const seg = full
+          .slice(start, end)
+          .replace(/\[\[?\d+\]?\]\([^)]*\)/g, "") // сноски [[41]](url)
+          .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1") // ссылки [текст](url) -> текст
+          .replace(/\(https?:\/\/[^)]*\)/g, "") // остаточные (url)
+          .replace(/https?:\/\/\S+/g, "") // голые url
+          .replace(/[\[\]]+/g, " ") // одиночные скобки сносок
+          .replace(/\s+/g, " ")
+          .trim();
+        const key = seg.slice(0, 48);
+        if (seg.length > 30 && !seen.has(key)) {
+          seen.add(key);
+          picks.push(seg);
+        }
+        from = idx + needle.length;
+      }
+    }
+    if (picks.length === 0) return null;
+    let excerpt = picks.join(" … ");
+    if (excerpt.length > maxChars) excerpt = `${excerpt.slice(0, maxChars)}…`;
+
+    return {
+      title: `Википедия: ${title} — экономика и бюджет`,
+      url: wikiUrl,
+      snippet: excerpt,
+      fullText: excerpt,
+      source: "ru.wikipedia.org",
+      contentFetched: true,
+      query: region,
+      fetchedAt: new Date().toISOString(),
+    };
+  } catch (err) {
+    console.warn(`[open-data] wiki facts failed: ${err instanceof Error ? err.message : err}`);
+    return null;
+  }
+}
+
 export async function jinaReader(url: string): Promise<string | null> {
   if (!/^https?:\/\//i.test(url)) return null;
   try {
