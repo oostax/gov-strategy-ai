@@ -13,6 +13,16 @@ import type { BlockKind } from "@/lib/agents/region-blocks/types";
 const GENERAL_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 const BUDGET_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
+/**
+ * Версия схемы/логики сбора доказательств. Повышать при изменениях, которые
+ * делают старые кэши некорректными по СОСТАВУ (не только по свежести).
+ * v2: статья региона в Википедии подключается ко всем блокам (иначе
+ *     competition/stakeholders оставались на генерик-страницах и выходили
+ *     пустыми). Записи со старой версией принудительно считаются устаревшими,
+ *     чтобы регион пересобрался с полноценными источниками — без ручной чистки.
+ */
+const CACHE_VERSION = 2;
+
 const BLOCK_QUERIES: Record<BlockKind, (region: string) => string[]> = {
   summary: (r) => [
     `${r} официальный паспорт региона население экономика`,
@@ -75,6 +85,8 @@ export interface BlockCacheEntry {
   evidenceText: string;
   sources: Source[];
   fetchedAt: string;
+  /** Версия логики сбора (см. CACHE_VERSION). Отсутствие = довирусная запись. */
+  v?: number;
 }
 
 export interface RegionCache {
@@ -104,6 +116,9 @@ function ttlForBlock(kind: BlockKind): number {
 
 export function isBlockFresh(entry: BlockCacheEntry | undefined, kind: BlockKind): boolean {
   if (!entry) return false;
+  // Записи со старой версией логики сбора считаем устаревшими (принудительный
+  // рефреш с актуальными источниками, напр. Википедией для всех блоков).
+  if ((entry.v ?? 1) < CACHE_VERSION) return false;
   const age = Date.now() - new Date(entry.fetchedAt).getTime();
   return age < ttlForBlock(kind);
 }
@@ -180,6 +195,7 @@ export async function fetchBlockEvidence(
     evidenceText: formatEvidenceForPrompt(evidence),
     sources: toSources(evidence),
     fetchedAt: new Date().toISOString(),
+    v: CACHE_VERSION,
   };
 }
 
