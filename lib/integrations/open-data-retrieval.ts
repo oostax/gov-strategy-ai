@@ -161,48 +161,50 @@ export async function searchWikipedia(region: string): Promise<WebEvidence[]> {
  * пригодными для прямой подстановки в промпт блока (budget/industries).
  * Живой источник, без хардкода: работает для любого региона.
  */
+/**
+ * Полный плоский текст статьи региона через MediaWiki extracts API.
+ * Тянем СРАЗУ по имени региона (redirects=1 сам разрешит перенаправление) —
+ * без промежуточного list=search, который был лишней точкой отказа и делал
+ * вызов флейки. Один ретрай на сетевую нестабильность. Заголовок берём из
+ * ответа (нормализованный/после редиректа).
+ */
+async function fetchWikiExtract(region: string): Promise<{ title: string; extract: string } | null> {
+  const params = new URLSearchParams({
+    action: "query",
+    prop: "extracts",
+    explaintext: "1",
+    redirects: "1",
+    titles: region,
+    format: "json",
+  });
+  const url = `https://ru.wikipedia.org/w/api.php?${params.toString()}`;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(url, { headers: { "User-Agent": BROWSER_UA }, signal: AbortSignal.timeout(15000) });
+      if (!res.ok) continue;
+      const data = (await res.json()) as {
+        query?: { pages?: Record<string, { title?: string; extract?: string; missing?: string }> };
+      };
+      const pages = Object.values(data.query?.pages ?? {});
+      const page = pages.find((p) => typeof p.extract === "string" && (p.extract as string).length >= 200);
+      if (page) return { title: page.title || region, extract: page.extract as string };
+    } catch {
+      /* ретрай */
+    }
+  }
+  return null;
+}
+
 export async function fetchWikiFacts(
   region: string,
   keywords: string[],
   maxChars = 3500,
 ): Promise<WebEvidence | null> {
   try {
-    // 1) Каноничный заголовок статьи через search API (иначе — имя региона).
-    let title = region;
-    try {
-      const searchUrl = `https://ru.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(
-        region,
-      )}&format=json&origin=*&srlimit=1`;
-      const sres = await fetch(searchUrl, { headers: { "User-Agent": BROWSER_UA }, signal: AbortSignal.timeout(10000) });
-      if (sres.ok) {
-        const sdata = (await sres.json()) as { query?: { search?: Array<{ title: string }> } };
-        title = sdata.query?.search?.[0]?.title || region;
-      }
-    } catch {
-      /* оставляем имя региона */
-    }
-
-    // 2) Полный ПЛОСКИЙ текст статьи (все разделы) через MediaWiki extracts API.
-    //    Быстро (~0.5с), чисто, без внешних зависимостей и без обрезки summary —
-    //    именно тут лежат доходы/расходы/ВРП, отсутствующие во вступлении.
-    const params = new URLSearchParams({
-      action: "query",
-      prop: "extracts",
-      explaintext: "1",
-      redirects: "1",
-      titles: title,
-      format: "json",
-      origin: "*",
-    });
-    const res = await fetch(`https://ru.wikipedia.org/w/api.php?${params.toString()}`, {
-      headers: { "User-Agent": BROWSER_UA },
-      signal: AbortSignal.timeout(15000),
-    });
-    if (!res.ok) return null;
-    const data = (await res.json()) as { query?: { pages?: Record<string, { extract?: string }> } };
-    const pages = data.query?.pages ?? {};
-    const full = Object.values(pages)[0]?.extract ?? "";
-    if (full.length < 200) return null;
+    const article = await fetchWikiExtract(region);
+    if (!article) return null;
+    const title = article.title;
+    const full = article.extract;
 
     // 3) Пассажи вокруг ключевых слов (до 2 вхождений на слово), дедуп, лимит.
     const lower = full.toLowerCase();
