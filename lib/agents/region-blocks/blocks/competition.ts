@@ -162,6 +162,7 @@ function normalizeCompetition(parsed: CompetitionBlockOutput, deps: BlockDeps): 
       .map((item, i) => coerceCompetitor(item, i))
       .filter((item): item is Competitor => item !== null)
       .filter(isRegionalSupplier)
+      .filter(isDigitalSupplier)
       .map((item) => ({
         ...item,
         sberAdvantage: deps.session.taskType === "sber_region_strategy" ? item.sberAdvantage : "",
@@ -213,6 +214,17 @@ function fallbackCompetitionQueries(region: string): string[] {
  * НЕ проверяем: ссылка на zakupki.gov.ru там — это законный ИСТОЧНИК доказательства
  * контракта, а не признак того, что «поставщик» = портал закупок.
  */
+/**
+ * Профильность: конкурент должен относиться к ИТ/цифре/связи/ПО (домен — продажи
+ * госсектору цифровых решений Сбера). Отсекает нерелевантные новости (сделки в
+ * АПК, стройка, ритейл), которые смягчённый поиск иногда притягивает. Лучше
+ * честно пусто + гипотеза «проверить реестр», чем неотносящийся к теме «конкурент».
+ */
+function isDigitalSupplier(item: Competitor) {
+  const text = `${item.vendor} ${item.product} ${item.evidence ?? ""} ${item.incumbentPosition ?? ""} ${item.where}`.toLowerCase();
+  return /информацион|цифров|систем|платформ|программн|(^|\s)по(\s|$)|софт|\bit\b|ит[-\s]|телеком|связ|облак|дата|цод|гис|госуслуг|автоматизац|биллинг|документооборот|ростелеком|барс|бфт|1с|диалог|крок|softline|нейросет|искусственн интеллект|портал/.test(text);
+}
+
 function isRegionalSupplier(item: Competitor) {
   const identity = `${item.vendor} ${item.product} ${item.incumbentPosition ?? ""}`.toLowerCase();
   if (/сертификат\s+минцифр|минцифр[аы]\s+россии|единая информационная система|(?:^|\s)еис(?:\s|$)|портал закупок|независимый регистратор/.test(identity)) {
