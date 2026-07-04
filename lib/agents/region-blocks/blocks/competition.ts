@@ -1,6 +1,7 @@
 import type { CompetitionBlockOutput } from "../types";
 import type { BlockDeps } from "../types";
-import { prepareBlockSources, callBlockLLM, parseBlockJson, refineByAgentInstructions, normalizeHypotheses, buildContextPreamble } from "./base";
+import type { Competitor } from "@/lib/schemas/structured-output";
+import { prepareBlockSources, callBlockLLM, parseBlockJson, refineByAgentInstructions, normalizeHypotheses, buildContextPreamble, pickString, isRecord } from "./base";
 
 const SYSTEM_PROMPT = `Ты — конкурентный аналитик. Составь карту поставщиков и конкурирующих решений в регионе.
 
@@ -69,11 +70,51 @@ export async function generateCompetitionBlock(
     result = normalizeCompetition(parsed, deps);
   }
 
+  // Salvage: если после двух проходов массив всё ещё пуст, а источники есть —
+  // reasoning-модель, вероятно, уронила вложенный массив. Добираем узким вызовом.
+  if (!result.competitiveLandscape.length && webEvidence.trim().length > 0) {
+    const salvaged = await salvageCompetition(deps, webEvidence);
+    if (salvaged.competitiveLandscape.length) {
+      result = salvaged;
+      parsed = { ...parsed, competitiveLandscape: salvaged.competitiveLandscape };
+    }
+  }
+
   return {
     ...result,
     sources: [...(parsed.sources || []), ...sources],
     hypotheses: normalizeCompetitionHypotheses(result, parsed),
   };
+}
+
+/**
+ * Узкий повторный вызов: просим ТОЛЬКО массив competitiveLandscape с примером и
+ * обязательным evidence, опираясь на уже собранные источники.
+ */
+async function salvageCompetition(deps: BlockDeps, webEvidence: string): Promise<CompetitionBlockOutput> {
+  const salvageMessage = [
+    `Регион: ${deps.region}`,
+    `Тема: ${deps.focusTopic}`,
+    `Тип сессии: ${deps.session.taskType}`,
+    "",
+    `Источники:\n${webEvidence}`,
+    "",
+    'Верни ТОЛЬКО JSON вида {"competitiveLandscape":[ ... ]} — БЕЗ каких-либо других полей.',
+    "2-4 поставщика/решения, у которых в источниках есть региональное подтверждение (контракт, закупка, внедрение, оператор системы).",
+    "У КАЖДОГО объекта ОБЯЗАТЕЛЬНЫ непустые vendor, product и evidence (конкретный факт: контракт/платформа/год). Портал закупок как ИСТОЧНИК доказательства допустим; но сам портал/регулятор (ЕИС, Минцифры) поставщиком не считается.",
+    'Пример: {"id":"comp_1","vendor":"Компания","product":"Решение","where":"Ведомство региона","stage":"active","threatLevel":"medium","evidence":"Контракт 2024 на сопровождение ГИС","incumbentPosition":"..."}',
+  ].join("\n");
+  try {
+    const raw = await callBlockLLM(SYSTEM_PROMPT, salvageMessage, deps.agentInstructions, {
+      sessionId: deps.session.id,
+      runId: deps.runId,
+      label: "competition.salvage",
+    });
+    const parsed = parseBlockJson(raw) as CompetitionBlockOutput;
+    return normalizeCompetition(parsed, deps);
+  } catch {
+    return { competitiveLandscape: [], sources: [], hypotheses: [] };
+  }
 }
 
 function buildCompetitionUserMessage(deps: BlockDeps, webEvidence: string): string {
@@ -93,10 +134,33 @@ function buildCompetitionUserMessage(deps: BlockDeps, webEvidence: string): stri
   ].join("\n");
 }
 
-function normalizeCompetition(parsed: CompetitionBlockOutput, deps: BlockDeps): CompetitionBlockOutput {
+/** Толерантно приводит сырой элемент к Competitor (синонимы ключей). */
+function coerceCompetitor(raw: unknown, index: number): Competitor | null {
+  if (!isRecord(raw)) return null;
+  const vendor = pickString(raw, ["vendor", "company", "name", "supplier", "provider", "поставщик"]);
+  const product = pickString(raw, ["product", "solution", "system", "platform", "service", "решение"]);
+  const evidence = pickString(raw, ["evidence", "proof", "fact", "contract", "доказательство"]);
+  if (!vendor || !evidence) return null;
   return {
-    competitiveLandscape: (parsed.competitiveLandscape || [])
-      .filter((item) => typeof item.evidence === "string" && item.evidence.trim().length > 0)
+    id: pickString(raw, ["id"]) || `comp_${index + 1}`,
+    vendor,
+    product: product || vendor,
+    where: pickString(raw, ["where", "location", "scope", "где"]),
+    stage: pickString(raw, ["stage", "status"]) || "active",
+    threatLevel: pickString(raw, ["threatLevel", "threat", "level"]) || "medium",
+    sberAdvantage: pickString(raw, ["sberAdvantage"]),
+    evidence,
+    incumbentPosition: pickString(raw, ["incumbentPosition", "position", "foothold"]),
+    sberCounterPosition: pickString(raw, ["sberCounterPosition", "counter"]),
+  };
+}
+
+function normalizeCompetition(parsed: CompetitionBlockOutput, deps: BlockDeps): CompetitionBlockOutput {
+  const rawList = Array.isArray(parsed.competitiveLandscape) ? parsed.competitiveLandscape : [];
+  return {
+    competitiveLandscape: rawList
+      .map((item, i) => coerceCompetitor(item, i))
+      .filter((item): item is Competitor => item !== null)
       .filter(isRegionalSupplier)
       .map((item) => ({
         ...item,
@@ -141,12 +205,18 @@ function fallbackCompetitionQueries(region: string): string[] {
   ];
 }
 
-function isRegionalSupplier(item: CompetitionBlockOutput["competitiveLandscape"][number]) {
-  const text = `${item.vendor} ${item.product} ${item.where} ${item.evidence} ${item.incumbentPosition}`.toLowerCase();
-  if (/сертификат\s+минцифр|минцифр[аы]\s+россии|единая информационная система|(?:^|\s)еис(?:\s|$)|zakupki\.gov\.ru|независимый регистратор/.test(text)) {
+/**
+ * Исключаем ТОЛЬКО когда сам поставщик — портал/регулятор/федеральная
+ * инфраструктура (проверяем vendor/product/incumbentPosition). evidence и where
+ * НЕ проверяем: ссылка на zakupki.gov.ru там — это законный ИСТОЧНИК доказательства
+ * контракта, а не признак того, что «поставщик» = портал закупок.
+ */
+function isRegionalSupplier(item: Competitor) {
+  const identity = `${item.vendor} ${item.product} ${item.incumbentPosition ?? ""}`.toLowerCase();
+  if (/сертификат\s+минцифр|минцифр[аы]\s+россии|единая информационная система|(?:^|\s)еис(?:\s|$)|портал закупок|независимый регистратор/.test(identity)) {
     return false;
   }
-  if (/федеральн(?:ый|ого|ая|ой)\s+(?:портал|оператор|сервис|регулятор)/.test(text)) {
+  if (/федеральн(?:ый|ого|ая|ой)\s+(?:портал|оператор|сервис|регулятор)/.test(identity)) {
     return false;
   }
   return true;

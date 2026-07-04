@@ -167,6 +167,20 @@ export function hasUsefulText(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/** Первое непустое строковое значение среди синонимичных ключей объекта. */
+export function pickString(record: unknown, keys: string[]): string {
+  if (!isRecord(record)) return "";
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim().length > 0) return value.trim();
+  }
+  return "";
+}
+
 export function normalizeHypotheses(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const result: string[] = [];

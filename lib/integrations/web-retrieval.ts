@@ -992,11 +992,14 @@ export async function retrieveOpenSources({
     else other.push(item);
   }
 
-  const shouldUseWikipedia =
-    region &&
-    (!explicitMode || /паспорт|население|экономик|врп|социально-эконом|общ(?:ий|ая|ее) контекст/i.test(focusTopic || queries.join(" ")));
+  // Статья региона в Википедии — надёжная база фактов (губернатор, министры,
+  // бюджет, экономика, крупные предприятия) для ЛЮБОГО блока. Раньше в
+  // explicit-режиме она подключалась только для «экономических» запросов, из-за
+  // чего stakeholders/competition оставались на генерик-страницах новостей и
+  // выходили пустыми. Включаем всегда, когда регион известен (живой источник).
+  const shouldUseWikipedia = Boolean(region);
 
-  if (shouldUseWikipedia) {
+  if (shouldUseWikipedia && region) {
     try {
       const wikiResults = await searchWikipedia(region);
       wikiResults.forEach(addResult);
