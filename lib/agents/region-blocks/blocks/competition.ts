@@ -2,6 +2,7 @@ import type { CompetitionBlockOutput } from "../types";
 import type { BlockDeps } from "../types";
 import type { Competitor } from "@/lib/schemas/structured-output";
 import { prepareBlockSources, callBlockLLM, parseBlockJson, refineByAgentInstructions, normalizeHypotheses, buildContextPreamble, pickString, isRecord } from "./base";
+import { fetchWikiFacts } from "@/lib/integrations/open-data-retrieval";
 
 const SYSTEM_PROMPT = `Ты — конкурентный аналитик Сбера по госсектору. Составь карту КОНКУРЕНТОВ Сбера в регионе — тех, кто борется за тот же бизнес региона и госсектора.
 
@@ -86,11 +87,65 @@ export async function generateCompetitionBlock(
     }
   }
 
+  // Если подтверждённых контрактов нет (открытые реестры закупок недоступны для
+  // машинного доступа: clearspending мёртв, zakupki под анти-ботом), НЕ оставляем
+  // пустоту: называем ВЕРОЯТНЫХ игроков как гипотезы «для проверки» — честно, с
+  // опорой на экономику региона, без выдачи их за факты.
+  let likelyHypotheses: string[] = [];
+  if (!result.competitiveLandscape.length) {
+    likelyHypotheses = await salvageLikelyCompetitors(deps);
+  }
+
+  const hypotheses = Array.from(
+    new Set([...likelyHypotheses, ...normalizeCompetitionHypotheses(result, parsed)]),
+  ).slice(0, 8);
+
   return {
     ...result,
     sources: [...(parsed.sources || []), ...sources],
-    hypotheses: normalizeCompetitionHypotheses(result, parsed),
+    hypotheses,
   };
+}
+
+/**
+ * Когда подтверждённых контрактов нет: называем ВЕРОЯТНЫХ конкурентов Сбера в
+ * регионе (крупные банки/финтех/ИТ) как ГИПОТЕЗЫ для проверки. Опора на реальную
+ * экономику региона (вытяжка из Википедии), формулировки «проверить …», не факты.
+ */
+async function salvageLikelyCompetitors(deps: BlockDeps): Promise<string[]> {
+  let regionFacts = "";
+  try {
+    const wiki = await fetchWikiFacts(
+      deps.region,
+      ["банк", "экономик", "предприяти", "промышленн", "крупнейш"],
+      2000,
+    );
+    if (wiki) regionFacts = wiki.snippet;
+  } catch {
+    /* без фактов — модель опирается на общеотраслевое знание */
+  }
+  const prompt = `Ты — конкурентный аналитик Сбера по госсектору. По региону НЕТ подтверждённых контрактов конкурентов в открытых источниках (реестры закупок недоступны).
+Назови 3-5 ВЕРОЯТНЫХ конкурентов Сбера за бизнес региона и госсектора и что по каждому ПРОВЕРИТЬ. Это ГИПОТЕЗЫ, не факты.
+Кого рассматривать: крупные банки, реально присутствующие в регионах (ВТБ, Газпромбанк, ПСБ, Альфа-Банк, Россельхозбанк, Совкомбанк, Т-Банк), финтех/эквайринг, профильные ИТ-вендоры госсектора (Ростелеком, БФТ, БАРС Груп, 1С).
+Формулируй как проверяемые гипотезы: «Проверить, ведёт ли <игрок> <РКО бюджета / зарплатные проекты / эквайринг / ГИС> в регионе».
+Верни ТОЛЬКО JSON: {"hypotheses":["...","..."]}. Без выдачи гипотез за факты, без выдуманных сумм и номеров контрактов.`;
+  const message = [
+    `Регион: ${deps.region}`,
+    regionFacts ? `\nКонтекст экономики региона:\n${regionFacts}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  try {
+    const raw = await callBlockLLM(prompt, message, deps.agentInstructions, {
+      sessionId: deps.session.id,
+      runId: deps.runId,
+      label: "competition.likely",
+    });
+    const parsed = parseBlockJson(raw) as { hypotheses?: unknown };
+    return normalizeHypotheses(parsed.hypotheses);
+  } catch {
+    return [];
+  }
 }
 
 /**
