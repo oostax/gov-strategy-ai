@@ -73,6 +73,36 @@ const taskOrder: TaskType[] = [
   "scenario_analysis",
 ];
 
+/** Человекочитаемые метки полей для сообщений о невалидной форме. */
+const FIELD_LABELS: Record<string, string> = {
+  userRole: "роль",
+  taskType: "тип материала",
+  audience: "аудитория результата",
+  horizon: "горизонт",
+  region: "регион",
+  focusTopic: "задача (что подготовить)",
+  detailLevel: "объём",
+  outputFormat: "формат",
+  urgency: "срочность",
+  deliveryFormat: "формат доставки",
+};
+
+/**
+ * onInvalid для form.handleSubmit: без него провал zod-валидации молча гасит
+ * сабмит — «кнопка ничего не делает». Показываем, какое поле мешает сборке.
+ */
+function reportInvalidPlan(errors: Record<string, { message?: string } | undefined>) {
+  const keys = Object.keys(errors);
+  if (keys.length === 0) {
+    toast.error("Не удалось собрать материал — проверьте заполнение формы.");
+    return;
+  }
+  const first = keys[0];
+  const label = FIELD_LABELS[first] ?? first;
+  const message = errors[first]?.message;
+  toast.error(`Не удалось собрать: проверьте «${label}»${message ? ` — ${message}` : ""}.`);
+}
+
 // ── Точка входа: переключатель «диалог / ручная форма» ──────────────────────
 
 export default function NewSessionPage() {
@@ -340,7 +370,7 @@ export function ChatFlow({
       { blocks: plan.enabledOrdered, volume: plan.state.volume },
       { shouldValidate: false },
     );
-    return form.handleSubmit(submit)();
+    return form.handleSubmit(submit, reportInvalidPlan)();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form, plan.enabledOrdered, plan.state.volume, submit]);
 
@@ -1355,7 +1385,7 @@ export function StepForm({
       { blocks: plan.enabledOrdered, volume: plan.state.volume },
       { shouldValidate: false },
     );
-    return form.handleSubmit(submit)();
+    return form.handleSubmit(submit, reportInvalidPlan)();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form, plan.enabledOrdered, plan.state.volume, submit]);
 
