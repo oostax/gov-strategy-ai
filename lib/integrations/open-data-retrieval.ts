@@ -182,14 +182,26 @@ export async function fetchWikiFacts(
       /* оставляем имя региона */
     }
 
-    // 2) Полный текст статьи через Jina (без 12k-обрезки jinaReader).
-    const wikiUrl = `https://ru.wikipedia.org/wiki/${encodeURIComponent(title.replace(/\s/g, "_"))}`;
-    const res = await fetch(`https://r.jina.ai/${wikiUrl}`, {
+    // 2) Полный ПЛОСКИЙ текст статьи (все разделы) через MediaWiki extracts API.
+    //    Быстро (~0.5с), чисто, без внешних зависимостей и без обрезки summary —
+    //    именно тут лежат доходы/расходы/ВРП, отсутствующие во вступлении.
+    const params = new URLSearchParams({
+      action: "query",
+      prop: "extracts",
+      explaintext: "1",
+      redirects: "1",
+      titles: title,
+      format: "json",
+      origin: "*",
+    });
+    const res = await fetch(`https://ru.wikipedia.org/w/api.php?${params.toString()}`, {
       headers: { "User-Agent": BROWSER_UA },
-      signal: AbortSignal.timeout(25000),
+      signal: AbortSignal.timeout(15000),
     });
     if (!res.ok) return null;
-    const full = await res.text();
+    const data = (await res.json()) as { query?: { pages?: Record<string, { extract?: string }> } };
+    const pages = data.query?.pages ?? {};
+    const full = Object.values(pages)[0]?.extract ?? "";
     if (full.length < 200) return null;
 
     // 3) Пассажи вокруг ключевых слов (до 2 вхождений на слово), дедуп, лимит.
@@ -202,18 +214,9 @@ export async function fetchWikiFacts(
       for (let n = 0; n < 2; n++) {
         const idx = lower.indexOf(needle, from);
         if (idx < 0) break;
-        const start = Math.max(0, idx - 160);
-        const end = Math.min(full.length, idx + 340);
-        // Чистим markdown-ссылки/сноски Jina и лишние пробелы.
-        const seg = full
-          .slice(start, end)
-          .replace(/\[\[?\d+\]?\]\([^)]*\)/g, "") // сноски [[41]](url)
-          .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1") // ссылки [текст](url) -> текст
-          .replace(/\(https?:\/\/[^)]*\)/g, "") // остаточные (url)
-          .replace(/https?:\/\/\S+/g, "") // голые url
-          .replace(/[\[\]]+/g, " ") // одиночные скобки сносок
-          .replace(/\s+/g, " ")
-          .trim();
+        const start = Math.max(0, idx - 200);
+        const end = Math.min(full.length, idx + 400);
+        const seg = full.slice(start, end).replace(/\s+/g, " ").trim();
         const key = seg.slice(0, 48);
         if (seg.length > 30 && !seen.has(key)) {
           seen.add(key);
@@ -226,6 +229,7 @@ export async function fetchWikiFacts(
     let excerpt = picks.join(" … ");
     if (excerpt.length > maxChars) excerpt = `${excerpt.slice(0, maxChars)}…`;
 
+    const wikiUrl = `https://ru.wikipedia.org/wiki/${encodeURIComponent(title.replace(/\s/g, "_"))}`;
     return {
       title: `Википедия: ${title} — экономика и бюджет`,
       url: wikiUrl,
