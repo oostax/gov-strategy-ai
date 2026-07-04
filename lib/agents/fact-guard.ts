@@ -63,7 +63,13 @@ function isFederalStakeholder(role?: string, department?: string): boolean {
 }
 
 function hasFullPersonName(name?: string): boolean {
-  return (name ?? "").trim().split(/\s+/).filter(Boolean).length >= 3;
+  // Принимаем «Имя Фамилия» (2 слова) и «Имя Отчество Фамилия» (3). Требование
+  // ровно 3 слов заставляло выдумывать отчество (неверное) или терять реального
+  // руководителя, названного двумя словами. «Именными» считаем только слова с
+  // заглавной буквы — так отсекаются служебные фразы («министр финансов»).
+  const parts = (name ?? "").trim().split(/\s+/).filter(Boolean);
+  const nameLike = parts.filter((p) => /^[А-ЯЁA-Z][А-Яа-яЁёA-Za-z.-]+$/.test(p));
+  return nameLike.length >= 2;
 }
 
 const PROBABILITY_NORM: Record<string, "high" | "medium" | "low"> = {
