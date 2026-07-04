@@ -104,6 +104,13 @@ export async function generateBudgetBlock(
     parsed = parseBlockJson(raw) as BudgetBlockOutput;
   }
 
+  // Salvage: reasoning-модель недетерминирована (temp форсится в 1) и порой не
+  // извлекает цифры даже когда они есть в wiki-вытяжке. Узкий повторный вызов
+  // строго на извлечение доходов/расходов из справочных фактов — детерминирует.
+  if (!hasBudgetFact(parsed) && wikiFacts) {
+    parsed = await salvageBudgetFromFacts(deps, wikiFacts.snippet, parsed);
+  }
+
   if (!hasBudgetFact(parsed)) {
     console.warn(`[blocks][budget] no budget fact found, using partial data`);
   }
@@ -131,6 +138,50 @@ export async function generateBudgetBlock(
     sources: [...(parsed.sources || []), ...sources],
     hypotheses: normalizeHypotheses(parsed.hypotheses),
   };
+}
+
+/**
+ * Узкий детерминирующий добор: из справочной вытяжки (где доходы/расходы/ВРП
+ * лежат стабильно) извлекаем именно бюджетные тоталы. Нужен, потому что основной
+ * проход reasoning-модели недетерминирован и иногда игнорирует цифры.
+ */
+async function salvageBudgetFromFacts(
+  deps: BlockDeps,
+  factsText: string,
+  prev: BudgetBlockOutput,
+): Promise<BudgetBlockOutput> {
+  const salvagePrompt = `Ты — бюджетный аналитик. Из приведённого текста извлеки бюджетные показатели региона.
+Верни ТОЛЬКО JSON: {"budgetLandscape":{"totalBudget":"строка с суммой и годом","totalIncomeValue":число_млрд_или_null,"totalExpenseValue":число_млрд_или_null}}.
+Если названы доходы/расходы бюджета за любой год — заполни (totalBudget как строку с годом, значения — в млрд ₽ числом). Ничего не выдумывай: если суммы нет — верни null.`;
+  const salvageMessage = [
+    `Регион: ${deps.region}`,
+    "",
+    "Текст со справочными фактами:",
+    factsText,
+  ].join("\n");
+  try {
+    const raw = await callBlockLLM(salvagePrompt, salvageMessage, deps.agentInstructions, {
+      sessionId: deps.session.id,
+      runId: deps.runId,
+      label: "budget.salvage",
+    });
+    const salv = parseBlockJson(raw) as BudgetBlockOutput;
+    const s = salv.budgetLandscape;
+    if (!s) return prev;
+    return {
+      ...prev,
+      budgetLandscape: {
+        ...prev.budgetLandscape,
+        totalBudget: hasUsefulText(s.totalBudget) ? s.totalBudget : (prev.budgetLandscape?.totalBudget ?? ""),
+        totalIncomeValue: typeof s.totalIncomeValue === "number" ? s.totalIncomeValue : prev.budgetLandscape?.totalIncomeValue,
+        totalExpenseValue: typeof s.totalExpenseValue === "number" ? s.totalExpenseValue : prev.budgetLandscape?.totalExpenseValue,
+        breakdown: prev.budgetLandscape?.breakdown ?? [],
+        keyPrograms: prev.budgetLandscape?.keyPrograms ?? [],
+      },
+    };
+  } catch {
+    return prev;
+  }
 }
 
 function buildBudgetUserMessage(deps: BlockDeps, webEvidence: string): string {
