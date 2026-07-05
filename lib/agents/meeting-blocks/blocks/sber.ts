@@ -79,8 +79,10 @@ export async function generateSberBlock(
 }
 
 /**
- * Узкий повторный вызов: просим ТОЛЬКО массив sberActions с обязательным asset
- * и примером, опираясь на уже сформулированный proposal.
+ * Надёжный добор sberActions: ДЕКОМПОЗИЦИЯ уже готового оффера/тезисов в 2-3 хода
+ * (это легче для модели, чем генерация с нуля) + РЕТРАЙ до 2 попыток, т.к.
+ * reasoning-модель недетерминированно роняет вложенный массив. Вместе с первым
+ * проходом — 3 шанса, чего достаточно для стабильного заполнения при наличии оффера.
  */
 async function salvageSberActions(
   deps: MeetingBlockDeps,
@@ -89,26 +91,30 @@ async function salvageSberActions(
 ): Promise<SberAction[]> {
   const salvageMessage = [
     contextBlock,
-    proposal ? `\nУже сформулированный оффер (proposal): ${proposal}` : "",
+    proposal ? `\nУже сформулированный оффер (proposal) — РАЗЛОЖИ его на конкретные ходы:\n${proposal}` : "",
     "",
-    'Верни ТОЛЬКО JSON вида {"sberActions":[ ... ]} — БЕЗ каких-либо других полей.',
-    "2-3 предметных хода Сбера. У КАЖДОГО объекта ОБЯЗАТЕЛЬНЫ непустые: asset, firstTwoWeeks, dataNeeded, artifact, commercialNextStep. Без общих слов «помочь с ИИ».",
-    'Пример: {"id":"sber_1","asset":"GigaChat for Business в ИБ-контуре","firstTwoWeeks":"...","dataNeeded":"...","artifact":"one-pager","commercialNextStep":"пилот в 1 отрасли"}',
+    'Верни ТОЛЬКО JSON вида {"sberActions":[ ... ]} — БЕЗ каких-либо других полей. Массив НЕ должен быть пустым.',
+    "Разложи участие Сбера на 2-3 предметных хода. У КАЖДОГО объекта ОБЯЗАТЕЛЬНЫ непустые: asset (конкретный актив/продукт Сбера), firstTwoWeeks (первые 2 недели после встречи), dataNeeded (какие данные просим у ЛПР), artifact (что оставляем ЛПР), commercialNextStep (следующий коммерческий шаг). Опирайся на оффер и тезисы; без общих слов «помочь с ИИ» и без выдуманных сделок/долей.",
+    'Пример: {"id":"sber_1","asset":"GigaChat for Business в ИБ-контуре","firstTwoWeeks":"развернуть песочницу на обезличенных обращениях","dataNeeded":"выгрузка 10 тыс. обращений","artifact":"one-pager с расчётом экономии","commercialNextStep":"пилот в 1 отрасли на 8 недель"}',
   ]
     .filter(Boolean)
     .join("\n");
-  try {
-    const raw = await callBlockLLM(SBER_SYSTEM_PROMPT, salvageMessage, deps.agentInstructions, {
-      sessionId: deps.session.id,
-      runId: deps.runId,
-      label: "sber.salvage",
-      maxTokens: 1400,
-    });
-    const parsed = parseBlockJson(raw) as { sberActions?: unknown };
-    return normalizeSberActions(parsed.sberActions);
-  } catch {
-    return [];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const raw = await callBlockLLM(SBER_SYSTEM_PROMPT, salvageMessage, deps.agentInstructions, {
+        sessionId: deps.session.id,
+        runId: deps.runId,
+        label: `sber.salvage.${attempt + 1}`,
+        maxTokens: 1400,
+      });
+      const parsed = parseBlockJson(raw) as { sberActions?: unknown };
+      const actions = normalizeSberActions(parsed.sberActions);
+      if (actions.length > 0) return actions;
+    } catch {
+      /* следующая попытка */
+    }
   }
+  return [];
 }
 
 function buildThesesContext(deps: MeetingBlockDeps): string {
