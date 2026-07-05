@@ -730,6 +730,23 @@ function roleLabel(role: string) {
   return labels[role] || role;
 }
 
+function BudgetCompareRow({ label, value, pct, tone }: { label: string; value: number; pct: number; tone: "income" | "expense" }) {
+  const bar = tone === "income" ? "from-emerald-500 to-emerald-400/70" : "from-rose-500 to-rose-400/70";
+  return (
+    <div>
+      <div className="mb-1 flex items-baseline justify-between gap-3">
+        <span className="text-xs font-medium">{label}</span>
+        <span className="shrink-0 text-xs font-semibold tabular-nums">
+          {value.toLocaleString("ru-RU")} <span className="text-[10px] font-medium text-muted-foreground">млрд ₽</span>
+        </span>
+      </div>
+      <div className="h-3 overflow-hidden rounded-full bg-muted">
+        <div className={`h-full rounded-full bg-gradient-to-r ${bar}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
 function BudgetSection({ landscape }: { landscape: RegionAnalysisOutput["budgetLandscape"] }) {
   if (!landscape) return null;
   const deficit = hasNum(landscape.totalIncomeValue) && hasNum(landscape.totalExpenseValue)
@@ -780,6 +797,24 @@ function BudgetSection({ landscape }: { landscape: RegionAnalysisOutput["budgetL
             </div>
           )}
         </div>
+        {hasNum(landscape.totalIncomeValue) && hasNum(landscape.totalExpenseValue) && (() => {
+          const inc = landscape.totalIncomeValue as number;
+          const exp = landscape.totalExpenseValue as number;
+          const max = Math.max(inc, exp, 1);
+          const gap = inc - exp;
+          return (
+            <div className="mb-3 rounded-xl border bg-muted/10 p-3.5">
+              <p className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Доходы и расходы</p>
+              <div className="space-y-2.5">
+                <BudgetCompareRow label="Доходы" value={inc} pct={Math.max(6, Math.round((inc / max) * 100))} tone="income" />
+                <BudgetCompareRow label="Расходы" value={exp} pct={Math.max(6, Math.round((exp / max) * 100))} tone="expense" />
+              </div>
+              <p className={`mt-3 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-semibold ${gap >= 0 ? "bg-emerald-500/12 text-emerald-700 dark:text-emerald-400" : "bg-amber-500/12 text-amber-700 dark:text-amber-400"}`}>
+                {gap >= 0 ? "Профицит" : "Дефицит"} {Math.abs(gap).toLocaleString("ru-RU")} млрд ₽
+              </p>
+            </div>
+          );
+        })()}
         {(() => {
           const expenses = (landscape.breakdown ?? [])
             .filter((b) => b.kind === "expense" && hasNum(b.value))

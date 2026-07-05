@@ -11,6 +11,7 @@ import {
   Clock,
   Database,
   ExternalLink,
+  Filter as FilterIcon,
   Landmark,
   Lightbulb,
   MessageSquare,
@@ -304,40 +305,44 @@ function MeetingHero({ data }: { data: MeetingOutput }) {
 }
 
 function AskLadderRow({ ladder }: { ladder: AskLadder }) {
-  const steps: { key: string; label: string; value?: string; tone: "max" | "target" | "min" }[] = [
-    { key: "max", label: "Максимум", value: ladder.max, tone: "max" },
-    { key: "target", label: "Цель", value: ladder.target, tone: "target" },
-    { key: "min", label: "Минимум", value: ladder.min, tone: "min" },
+  const steps: { key: string; label: string; value?: string; tone: "max" | "target" | "min"; width: string }[] = [
+    { key: "max", label: "Максимум", value: ladder.max, tone: "max", width: "100%" },
+    { key: "target", label: "Цель", value: ladder.target, tone: "target", width: "82%" },
+    { key: "min", label: "Минимум", value: ladder.min, tone: "min", width: "64%" },
   ];
   const visible = steps.filter((s) => nonEmpty(s.value));
   if (!visible.length) return null;
+  // Воронка запросов: полосы сужаются max → цель → минимум (что реально забираем).
   return (
-    <div className="grid gap-2.5 p-4 sm:grid-cols-3">
-      {visible.map((s) => (
-        <div
-          key={s.key}
-          className={`rounded-xl border p-3 ${
+    <div className="p-4">
+      <p className="mb-2.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <FilterIcon className="size-3" /> Воронка запросов — от амбиции к тому, что забираем точно
+      </p>
+      <div className="space-y-1.5">
+        {visible.map((s, idx) => {
+          const tone =
             s.tone === "max"
-              ? "border-emerald-500/25 bg-emerald-500/[0.06]"
+              ? { bar: "border-emerald-500/30 bg-emerald-500/[0.07]", badge: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" }
               : s.tone === "min"
-                ? "border-amber-500/25 bg-amber-500/[0.06]"
-                : "bg-muted/20"
-          }`}
-        >
-          <span
-            className={`inline-flex rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-              s.tone === "max"
-                ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
-                : s.tone === "min"
-                  ? "bg-amber-500/15 text-amber-700 dark:text-amber-400"
-                  : "bg-primary/10 text-primary"
-            }`}
-          >
-            {s.label}
-          </span>
-          <p className="mt-2 text-[13px] font-medium leading-snug">{s.value}</p>
-        </div>
-      ))}
+                ? { bar: "border-amber-500/30 bg-amber-500/[0.07]", badge: "bg-amber-500/15 text-amber-700 dark:text-amber-400" }
+                : { bar: "border-primary/25 bg-primary/[0.05]", badge: "bg-primary/10 text-primary" };
+          return (
+            <div key={s.key} className="mx-auto transition-all" style={{ width: s.width }}>
+              <div className={`rounded-xl border ${tone.bar} px-3 py-2.5`}>
+                <div className="flex items-center gap-2">
+                  <span className={`inline-flex rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${tone.badge}`}>
+                    {s.label}
+                  </span>
+                  {idx === visible.length - 1 && (
+                    <span className="text-[10px] font-medium text-muted-foreground">заберём даже при осторожном ЛПР</span>
+                  )}
+                </div>
+                <p className="mt-1.5 text-[12.5px] font-medium leading-snug">{s.value}</p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -604,6 +609,66 @@ const STANCE_META: Record<
   neutral: { label: "нейтрал", dot: "bg-slate-400" },
 };
 
+/** Влияние участника выводим структурно из роли (не выдуманный факт, а эвристика
+ * по типу должности): первые лица и держатели ресурса — высокое, прочие — среднее. */
+function participantInfluence(p: MeetingParticipant): "high" | "mid" {
+  const r = `${p.role} ${p.name ?? ""}`.toLowerCase();
+  if (/лпр|министр|губернатор|глава|руководител|директор|первое лицо|держател|бюджет|техпривратник|курат/.test(r)) {
+    return "high";
+  }
+  return "mid";
+}
+
+function ParticipantMatrix({ participants }: { participants: MeetingParticipant[] }) {
+  const cols: MeetingParticipant["stance"][] = ["skeptic", "neutral", "ally"];
+  const rows: Array<{ key: "high" | "mid"; label: string }> = [
+    { key: "high", label: "Высокое влияние" },
+    { key: "mid", label: "Среднее влияние" },
+  ];
+  const cell = (inf: "high" | "mid", stance: MeetingParticipant["stance"]) =>
+    participants.filter((p) => participantInfluence(p) === inf && p.stance === stance);
+  return (
+    <div className="mb-4 overflow-hidden rounded-xl border">
+      {/* Заголовки колонок: позиция */}
+      <div className="grid grid-cols-[92px_repeat(3,1fr)] border-b bg-muted/25 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <div className="px-2 py-1.5">Влияние ↓ / Позиция →</div>
+        {cols.map((c) => (
+          <div key={c} className="flex items-center gap-1.5 border-l px-2 py-1.5">
+            <span className={`size-2 rounded-full ${STANCE_META[c].dot}`} aria-hidden />
+            {STANCE_META[c].label}
+          </div>
+        ))}
+      </div>
+      {rows.map((row) => (
+        <div key={row.key} className="grid grid-cols-[92px_repeat(3,1fr)] border-b last:border-b-0">
+          <div className="flex items-center bg-muted/15 px-2 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            {row.label}
+          </div>
+          {cols.map((c) => {
+            const people = cell(row.key, c);
+            return (
+              <div key={c} className="min-h-[52px] space-y-1 border-l p-1.5">
+                {people.map((p, i) => (
+                  <div
+                    key={p.id ?? i}
+                    className="rounded-md border bg-card px-1.5 py-1 text-[11px] font-medium leading-tight"
+                    title={p.whatMatters}
+                  >
+                    {nonEmpty(p.name) ? p.name : p.role}
+                    {nonEmpty(p.name) && (
+                      <span className="block text-[9.5px] font-normal text-muted-foreground">{p.role}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ParticipantsSection({ participants }: { participants: MeetingParticipant[] }) {
   return (
     <Card className="rounded-2xl">
@@ -611,9 +676,10 @@ function ParticipantsSection({ participants }: { participants: MeetingParticipan
         <SectionHeader
           icon={Users}
           title="Карта участников встречи"
-          subtitle="Роль и отношение: союзник / скептик / нейтрал"
+          subtitle="Матрица влияние × позиция + детали по каждому"
           count={participants.length}
         />
+        <ParticipantMatrix participants={participants} />
         <div className="grid gap-2.5 lg:grid-cols-3">
           {participants.map((p, idx) => {
             const stance = STANCE_META[p.stance] ?? STANCE_META.neutral;
