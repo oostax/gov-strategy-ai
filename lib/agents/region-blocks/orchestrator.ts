@@ -4,6 +4,7 @@ import type { TypedOutput } from "@/lib/schemas/structured-output";
 import { formatRegionContext, selectRelevantPlaybooks } from "@/lib/agents/prompt-builder";
 import { formatSberProjectsForPrompt } from "@/lib/storage/sber-projects";
 import { getStorage } from "@/lib/storage/local-json-storage";
+import { getMemoryClient } from "@/lib/integrations/mempalace-client";
 import { fallbackRegionBlocksPlan, planRegionBlocks } from "./planner";
 import { generateSummaryBlock } from "./blocks/summary";
 import { generateBudgetBlock } from "./blocks/budget";
@@ -138,6 +139,64 @@ async function loadSberProjectsContext(session: SessionProfile, plan: RegionBloc
   }
 }
 
+/**
+ * Retrieve: подтягиваем из MemPalace прошлый контекст по региону/теме — прошлые
+ * анализы и накопленные факты. CRM-слой (tier="crm"), не интернет. Best-effort:
+ * сбой MemPalace не роняет генерацию.
+ */
+async function loadMemoryContext(plan: RegionBlocksPlan, prompt: string): Promise<string> {
+  const query = [plan.region, plan.focusTopic, prompt].filter(Boolean).join(" ").trim();
+  if (!query) return "";
+  try {
+    const hits = await getMemoryClient().search(query);
+    const lines = hits
+      .filter((hit) => hit.excerpt && hit.excerpt.trim().length > 0)
+      .slice(0, 5)
+      .map((hit) => `- ${hit.excerpt.replace(/\s+/g, " ").trim().slice(0, 400)}`);
+    return lines.length ? lines.join("\n") : "";
+  } catch (error) {
+    console.warn(`[blocks] MemPalace retrieve skipped: ${error instanceof Error ? error.message : error}`);
+    return "";
+  }
+}
+
+/**
+ * Persist: сохраняем компактные факты анализа региона (тип региона, ВРП/бюджет,
+ * опорные отрасли, приоритеты) — чтобы будущие сессии по региону подтягивали
+ * накопленный контекст. Best-effort.
+ */
+function buildRegionFacts(plan: RegionBlocksPlan, output: TypedOutput): string {
+  const data = output.kind === "region" ? output.data : undefined;
+  const parts: string[] = [
+    `Анализ региона (${new Date().toISOString().slice(0, 10)}): регион=${plan.region}; тип=${plan.archetype || "—"}.`,
+  ];
+  if (data) {
+    if (data.regionSummary?.oneLiner) parts.push(`Резюме: ${String(data.regionSummary.oneLiner).slice(0, 300)}`);
+    const bl = data.budgetLandscape;
+    if (bl?.totalBudget) parts.push(`Бюджет: ${String(bl.totalBudget).slice(0, 160)}`);
+    if (Array.isArray(data.industryBreakdown)) {
+      const inds = data.industryBreakdown
+        .map((i) => (i && typeof i === "object" ? String(i.name ?? "") : ""))
+        .filter((s) => s.trim().length > 1)
+        .slice(0, 5);
+      if (inds.length) parts.push(`Опорные отрасли: ${inds.join(", ")}`);
+    }
+    const priorities = data.strategicPriorities?.confirmed;
+    if (Array.isArray(priorities) && priorities.length) {
+      parts.push(`Приоритеты: ${priorities.slice(0, 4).join("; ").slice(0, 300)}`);
+    }
+  }
+  return parts.join("\n");
+}
+
+async function persistRegionFacts(sessionId: string, plan: RegionBlocksPlan, output: TypedOutput) {
+  try {
+    await getMemoryClient().rememberFacts(sessionId, buildRegionFacts(plan, output), "region_facts");
+  } catch (error) {
+    console.warn(`[blocks] MemPalace persist skipped: ${error instanceof Error ? error.message : error}`);
+  }
+}
+
 async function continueBlocksGeneration(
   session: SessionProfile,
   region: RegionProfile | null,
@@ -169,6 +228,7 @@ async function continueBlocksGeneration(
       includeSberPortfolio: session.taskType === "sber_region_strategy",
     }),
     sberProjectsContext: await loadSberProjectsContext(session, plan, prompt),
+    memoryContext: await loadMemoryContext(plan, prompt),
   };
   console.log(
     `[blocks][run] instructions chars=${deps.agentInstructions?.length || 0} regionContext=${deps.regionContext?.length || 0} sberProjects=${deps.sberProjectsContext?.length || 0} refinement=${process.env.BLOCK_REFINEMENT_MODE || "off"}`,
@@ -416,6 +476,10 @@ async function continueBlocksGeneration(
     const fs = await import("fs/promises");
     await fs.unlink(structuredErrorPath(session.id));
   } catch {}
+
+  // Persist в MemPalace: компактные факты анализа региона для будущих сессий.
+  await persistRegionFacts(session.id, plan, output);
+
   run = await updateRun(run, {
     status: "ready",
     completedAt: new Date().toISOString(),

@@ -171,6 +171,8 @@ export interface BlockDeps {
   priorBlocks?: Array<{ kind: BlockKind; data: unknown }>;
   regionContext?: string;
   sberProjectsContext?: string;
+  /** Прошлый контекст из MemPalace (прошлые анализы/факты по региону). */
+  memoryContext?: string;
 }
 
 // ── Block status for API polling ──────────────────────────────────────────────

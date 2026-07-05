@@ -291,6 +291,18 @@ async function runGeneration(sessionId: string, prompt: string, session: Session
       JSON.stringify(result),
     );
 
+    // Persist в MemPalace: компактные факты сессии для будущего контекста
+    // (одноходовые типы — executive_brief и др.). Best-effort.
+    try {
+      const facts = [
+        `Сессия ${session.taskType} (${new Date().toISOString().slice(0, 10)}): регион=${session.region || "—"}; тема=${(session.focusTopic || "").slice(0, 200)}.`,
+        JSON.stringify(result).replace(/\s+/g, " ").slice(0, 900),
+      ].join("\n");
+      await getMemoryClient().rememberFacts(sessionId, facts, "session_facts");
+    } catch (memErr) {
+      console.warn(`[structured] MemPalace persist skipped: ${memErr instanceof Error ? memErr.message : memErr}`);
+    }
+
     await writeProgress(sessionId, "done", "Готово", 100);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

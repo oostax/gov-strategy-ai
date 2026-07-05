@@ -189,7 +189,7 @@ function buildMeetingFacts(plan: MeetingBlocksPlan, output: TypedOutput): string
 
 async function persistMeetingFacts(sessionId: string, plan: MeetingBlocksPlan, output: TypedOutput) {
   try {
-    await getMemoryClient().rememberMeetingFacts(sessionId, buildMeetingFacts(plan, output));
+    await getMemoryClient().rememberFacts(sessionId, buildMeetingFacts(plan, output), "meeting_facts");
   } catch (error) {
     console.warn(`[meeting-blocks] MemPalace persist skipped: ${error instanceof Error ? error.message : error}`);
   }

@@ -146,6 +146,9 @@ export function buildContextPreamble(deps: BlockDeps): string {
     deps.sberProjectsContext
       ? `\nРелевантные реальные проекты Сбера для оценки конкурентной позиции:\n${deps.sberProjectsContext}`
       : "",
+    deps.memoryContext
+      ? `\nПамять по прошлым анализам региона (MemPalace) — CRM-контекст (tier="crm"), НЕ интернет:\n${deps.memoryContext}`
+      : "",
   ].filter(Boolean).join("\n\n");
 }
 
