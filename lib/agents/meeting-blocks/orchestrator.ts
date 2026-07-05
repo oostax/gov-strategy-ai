@@ -4,6 +4,7 @@ import type { TypedOutput } from "@/lib/schemas/structured-output";
 import { formatRegionContext, selectRelevantPlaybooks } from "@/lib/agents/prompt-builder";
 import { formatSberProjectsForPrompt } from "@/lib/storage/sber-projects";
 import { getStorage } from "@/lib/storage/local-json-storage";
+import { getMemoryClient } from "@/lib/integrations/mempalace-client";
 import { logBlockEvent } from "@/lib/agents/region-blocks/logger";
 import { fallbackMeetingBlocksPlan, planMeetingBlocks } from "./planner";
 import { generateMinistryBlock } from "./blocks/ministry";
@@ -136,6 +137,64 @@ async function loadSberProjectsContext(plan: MeetingBlocksPlan, prompt: string) 
   }
 }
 
+/**
+ * Retrieve: подтягиваем из MemPalace прошлый контекст по ведомству/региону/ЛПР —
+ * историю встреч, реальные договорённости и отношения со Сбером. Это CRM-слой
+ * (tier="crm"), не интернет. MemPalace опционален: сбой не роняет генерацию.
+ */
+async function loadMemoryContext(plan: MeetingBlocksPlan, prompt: string): Promise<string> {
+  const query = [plan.ministry, plan.lprName, plan.region, plan.focusTopic, prompt]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  if (!query) return "";
+  try {
+    const hits = await getMemoryClient().search(query);
+    const lines = hits
+      .filter((hit) => hit.excerpt && hit.excerpt.trim().length > 0)
+      .slice(0, 5)
+      .map((hit) => `- ${hit.excerpt.replace(/\s+/g, " ").trim().slice(0, 400)}`);
+    return lines.length ? lines.join("\n") : "";
+  } catch (error) {
+    console.warn(`[meeting-blocks] MemPalace retrieve skipped: ${error instanceof Error ? error.message : error}`);
+    return "";
+  }
+}
+
+/**
+ * Persist: сохраняем компактные факты встречи (ведомство, цель, ключевые факты
+ * портрета, оффер, целевая договорённость) — чтобы будущие встречи с этим
+ * ведомством подтягивали накопленный контекст. Best-effort.
+ */
+function buildMeetingFacts(plan: MeetingBlocksPlan, output: TypedOutput): string {
+  const data = output.kind === "meeting" ? output.data : undefined;
+  const parts: string[] = [
+    `Встреча (${new Date().toISOString().slice(0, 10)}): регион=${plan.region}; ведомство=${plan.ministry || "—"}; ЛПР=${plan.lprName || plan.lprRole || "—"}.`,
+  ];
+  if (data) {
+    if (data.meetingGoal) parts.push(`Цель: ${String(data.meetingGoal).slice(0, 300)}`);
+    const portrait = data.ministryPortrait;
+    if (portrait && Array.isArray(portrait.stats)) {
+      const stats = portrait.stats
+        .map((s) => (s && typeof s === "object" ? `${s.label ?? ""}: ${s.value ?? ""}` : ""))
+        .filter((s) => s.trim().length > 2)
+        .slice(0, 4);
+      if (stats.length) parts.push(`Факты ведомства: ${stats.join("; ")}`);
+    }
+    if (data.proposal) parts.push(`Оффер Сбера: ${String(data.proposal).slice(0, 300)}`);
+    if (data.askLadder?.target) parts.push(`Целевая договорённость: ${String(data.askLadder.target).slice(0, 200)}`);
+  }
+  return parts.join("\n");
+}
+
+async function persistMeetingFacts(sessionId: string, plan: MeetingBlocksPlan, output: TypedOutput) {
+  try {
+    await getMemoryClient().rememberMeetingFacts(sessionId, buildMeetingFacts(plan, output));
+  } catch (error) {
+    console.warn(`[meeting-blocks] MemPalace persist skipped: ${error instanceof Error ? error.message : error}`);
+  }
+}
+
 async function continueMeetingBlocks(
   session: SessionProfile,
   region: RegionProfile | null,
@@ -168,7 +227,11 @@ async function continueMeetingBlocks(
     agentInstructions: await loadAgentInstructions(session),
     regionContext: formatRegionContext(region, { includeSberPortfolio: true }),
     sberProjectsContext: await loadSberProjectsContext(plan, prompt),
+    memoryContext: await loadMemoryContext(plan, prompt),
   };
+  if (baseDeps.memoryContext) {
+    console.log(`[meeting-blocks][memory] retrieved ${baseDeps.memoryContext.split("\n").length} prior context lines`);
+  }
 
   const waves = buildWaves(plan);
   for (let waveIndex = 0; waveIndex < waves.length; waveIndex++) {
@@ -300,6 +363,10 @@ async function continueMeetingBlocks(
     const fs = await import("fs/promises");
     await fs.unlink(structuredErrorPath(session.id));
   } catch {}
+
+  // Persist в MemPalace: компактные факты встречи для будущих сессий (best-effort).
+  await persistMeetingFacts(session.id, plan, output);
+
   run = await updateRun(run, {
     status: "ready",
     completedAt: new Date().toISOString(),

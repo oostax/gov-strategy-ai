@@ -12,9 +12,39 @@ import {
   buildContextPreamble,
   buildMinistryContext,
   isRecord,
+  regionCoreTokens,
 } from "./base";
 import { DOSSIER_SYSTEM_PROMPT, volumeDirective } from "@/lib/prompts/meeting-blocks-contract";
+import { fetchWikiFacts } from "@/lib/integrations/open-data-retrieval";
 import { logBlockEvent } from "@/lib/agents/region-blocks/logger";
+
+/** Ключевые слова биографии для вытяжки о персоне из Википедии. */
+const PERSON_WIKI_KEYWORDS = ["родил", "назначен", "образовани", "карьер", "должност", "министр", "губернатор", "возглав", "заместител"];
+
+/**
+ * Опциональная справка о ЛПР из Википедии — только если извлечённый текст
+ * действительно про ЭТУ персону в ЭТОМ регионе/ведомстве (гейт релевантности),
+ * иначе однофамилец мог бы подмешать чужую биографию. Пустая строка — если нет.
+ */
+async function fetchPersonFacts(deps: MeetingBlockDeps): Promise<string> {
+  const name = (deps.lprName || "").trim();
+  if (name.split(/\s+/).filter(Boolean).length < 2) return ""; // нужно хотя бы Имя Фамилия
+  try {
+    const wiki = await fetchWikiFacts(name, PERSON_WIKI_KEYWORDS, 1600);
+    if (!wiki) return "";
+    const hay = wiki.snippet.toLowerCase();
+    const regionTokens = regionCoreTokens(deps.region || "");
+    const roleTokens = [deps.ministry, deps.lprRole, "министр", "губернатор", "цифров"]
+      .filter(Boolean)
+      .flatMap((t) => t!.toLowerCase().split(/\s+/))
+      .filter((t) => t.length >= 4);
+    const relevant =
+      regionTokens.some((t) => hay.includes(t)) || roleTokens.some((t) => hay.includes(t));
+    return relevant ? wiki.snippet : "";
+  } catch {
+    return "";
+  }
+}
 
 export async function generateDossierBlock(
   deps: MeetingBlockDeps,
@@ -24,6 +54,12 @@ export async function generateDossierBlock(
     kind: "dossier",
     limit: 4,
   });
+
+  // Умный поиск по персоне: точечная справка о ЛПР (с гейтом релевантности).
+  const personFacts = await fetchPersonFacts(deps);
+  if (personFacts) {
+    webEvidence = `Справочные факты о персоне (Википедия):\n${personFacts}\n\n${webEvidence}`;
+  }
 
   let userMessage = buildUserMessage(deps, webEvidence);
   let raw = await callBlockLLM(DOSSIER_SYSTEM_PROMPT, userMessage, deps.agentInstructions, {
@@ -59,6 +95,7 @@ export async function generateDossierBlock(
       ],
       { kind: "dossier", skipCache: true, limit: 4 },
     ));
+    if (personFacts) webEvidence = `Справочные факты о персоне (Википедия):\n${personFacts}\n\n${webEvidence}`;
     userMessage = buildUserMessage(deps, webEvidence);
     raw = await callBlockLLM(DOSSIER_SYSTEM_PROMPT, userMessage, deps.agentInstructions, {
       sessionId: deps.session.id,

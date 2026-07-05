@@ -182,6 +182,9 @@ export interface MeetingBlockDeps {
   agentInstructions?: string;
   regionContext?: string;
   sberProjectsContext?: string;
+  /** Прошлый контекст из MemPalace (история встреч/договорённостей, реальные
+   * отношения со Сбером) — питает досье.relationship=crm, возражения, «после». */
+  memoryContext?: string;
   /** Готовые блоки предыдущих волн — для контекста (ministry → theses и т.д.). */
   priorBlocks?: Array<{ kind: MeetingBlockKind; data: unknown }>;
   /** Прямая подстановка evidence (используется chat-edit/тестами). */

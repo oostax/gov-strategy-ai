@@ -19,6 +19,8 @@ export interface MemoryClient {
   rememberOutput(output: AgentOutput): Promise<void>;
   rememberFeedback(feedback: Feedback): Promise<void>;
   rememberEvolution(result: EvolutionResult): Promise<void>;
+  /** Компактные факты встречи (ведомство, договорённости) — для будущих сессий. */
+  rememberMeetingFacts(sessionId: string, facts: string): Promise<void>;
 }
 
 interface McpTextResponse {
@@ -239,6 +241,16 @@ export function getMemoryClient(): MemoryClient {
           2,
         ),
         source_file: "gov-strategy-ai/evolution",
+        added_by: "gov-strategy-ai",
+      });
+    },
+    async rememberMeetingFacts(sessionId, facts) {
+      assertMemPalaceConnected();
+      await callMcpTool("mempalace_add_drawer", {
+        wing: "gov_strategy_ai",
+        room: `meeting_facts_${sessionId}`,
+        content: facts,
+        source_file: "gov-strategy-ai/meeting_facts",
         added_by: "gov-strategy-ai",
       });
     },

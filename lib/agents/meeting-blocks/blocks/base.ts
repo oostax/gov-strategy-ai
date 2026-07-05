@@ -316,6 +316,9 @@ export function buildContextPreamble(deps: MeetingBlockDeps): string {
     deps.sberProjectsContext
       ? `\nРелевантные реальные проекты и активы Сбера:\n${deps.sberProjectsContext}`
       : "",
+    deps.memoryContext
+      ? `\nПамять по прошлым сессиям и ведомству (MemPalace) — это CRM-контекст (tier="crm"), НЕ интернет:\n${deps.memoryContext}`
+      : "",
   ]
     .filter(Boolean)
     .join("\n\n");
