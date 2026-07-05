@@ -156,12 +156,16 @@ function normalizeDossier(value: unknown, deps: MeetingBlockDeps): LprDossier {
   const d = isRecord(value) ? value : {};
   const name = hasUsefulText(d.name) ? d.name.trim() : deps.lprName || undefined;
   const role = hasUsefulText(d.role) ? d.role.trim() : deps.lprRole || undefined;
+  // relationship — это tier="crm": допускаем ТОЛЬКО когда MemPalace реально вернул
+  // прошлый контекст. Иначе модель склонна выдумать «тёплое отношение / оценка N/5»,
+  // а выдуманный CRM недопустим. Нет памяти — нет плитки relationship.
+  const hasMemory = Boolean(deps.memoryContext && deps.memoryContext.trim().length > 0);
   return {
     name,
     role,
     known: normalizeTile(d.known, "fact"),
     motive: normalizeTile(d.motive, "hypothesis"),
-    relationship: normalizeTile(d.relationship, "crm"),
+    relationship: hasMemory ? normalizeTile(d.relationship, "crm") : undefined,
     ask: normalizeTile(d.ask, "ask"),
   };
 }
