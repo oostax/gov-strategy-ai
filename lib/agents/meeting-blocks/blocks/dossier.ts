@@ -17,7 +17,11 @@ import {
 import { DOSSIER_SYSTEM_PROMPT, volumeDirective } from "@/lib/prompts/meeting-blocks-contract";
 import { fetchWikiFacts } from "@/lib/integrations/open-data-retrieval";
 import { logBlockEvent } from "@/lib/agents/region-blocks/logger";
-import { stripUnsupportedNumericClauses } from "@/lib/quality/meeting-output-quality";
+import {
+  normalizeFactualProse,
+  stripUnsupportedNamedParentheticals,
+  stripUnsupportedNumericClauses,
+} from "@/lib/quality/meeting-output-quality";
 
 /** Ключевые слова биографии для вытяжки о персоне из Википедии. */
 const PERSON_WIKI_KEYWORDS = ["родил", "назначен", "образовани", "карьер", "должност", "министр", "губернатор", "возглав", "заместител"];
@@ -161,7 +165,12 @@ function normalizeTile(
       ? retrievedSources.find((item) => item.url?.replace(/\/$/, "") === normalizedUrl)
       : undefined;
     const evidence = matched ? `${matched.title} ${matched.excerpt ?? ""}` : "";
-    text = stripUnsupportedNumericClauses(text, evidence);
+    text = normalizeFactualProse(
+      stripUnsupportedNamedParentheticals(
+        stripUnsupportedNumericClauses(text, evidence),
+        evidence,
+      ),
+    );
     if (!text) return undefined;
   }
   return { text, tier, source };

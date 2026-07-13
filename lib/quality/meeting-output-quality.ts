@@ -237,6 +237,25 @@ export function assessTypedOutput(
  * from that clause is present in the cited source excerpt/title. Clauses without
  * numbers are preserved; unsupported numeric clauses are removed conservatively.
  */
+export function stripUnsupportedNamedParentheticals(text: string, evidence: string): string {
+  const evidenceLower = evidence.toLowerCase();
+  return text.replace(/\(([^)]+)\)/gu, (full, content: string) => {
+    const names = content.match(/[А-ЯЁ][а-яё]{3,}/gu) ?? [];
+    if (names.some((name) => !evidenceLower.includes(name.toLowerCase()))) return "";
+    return full;
+  }).replace(/\s{2,}/g, " ").trim();
+}
+
+export function normalizeFactualProse(text: string): string {
+  return text
+    .split(/(?<=[.!?])\s+/u)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.split(/\s+/).length >= 3)
+    .map((sentence) => sentence.charAt(0).toUpperCase() + sentence.slice(1))
+    .join(" ")
+    .trim();
+}
+
 export function stripUnsupportedNumericClauses(text: string, evidence: string): string {
   const normalizedEvidence = normalizeNumericText(evidence);
   const clauses = text

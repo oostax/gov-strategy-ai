@@ -8,8 +8,10 @@ import {
   assessTypedOutput,
   deriveFiscalStance,
   hasSupportedFiscalStance,
+  normalizeFactualProse,
   stripDecorativeSymbols,
   stripUnsupportedHighRiskClauses,
+  stripUnsupportedNamedParentheticals,
   stripUnsupportedNumericClauses,
 } from "../../lib/quality/meeting-output-quality.ts";
 import {
@@ -64,6 +66,17 @@ test("бюджетная позиция требует прямого подтв
 
 test("деловой текст очищается от декоративных эмодзи", () => {
   assert.equal(stripDecorativeSymbols("1️⃣ GigaChat → 2️⃣ SberCloud"), "GigaChat → SberCloud");
+});
+
+test("фактический текст не сохраняет неподтверждённое имя и обрывки", () => {
+  const cleaned = stripUnsupportedNamedParentheticals(
+    "Назначен 25 сентября 2025 г. (указ подписал Раустам Минниханов). занимал должность первого заместителя. в Казани.",
+    "Назначен 25 сентября 2025 г. С апреля 2020 года занимал должность первого заместителя.",
+  );
+  assert.equal(
+    normalizeFactualProse(cleaned),
+    "Назначен 25 сентября 2025 г. Занимал должность первого заместителя.",
+  );
 });
 
 test("неподтверждённый процент не попадает в главный тезис", () => {
