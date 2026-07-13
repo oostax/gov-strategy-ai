@@ -240,7 +240,21 @@ export async function prepareBlockSources(
   const relevant = evidenceRaw.filter((e) =>
     isRelevantSource(e.title || "", e.url || "", e.snippet || "", relCtx),
   );
-  const evidence = relevant.length ? relevant : [];
+  let evidence = relevant.length ? relevant : [];
+  if (options.kind === "dossier" && deps.lprName?.trim()) {
+    const nameTokens = deps.lprName
+      .toLowerCase()
+      .split(/\s+/)
+      .map((token) => token.replace(/[^a-zа-яё-]/gi, ""))
+      .filter((token) => token.length >= 4);
+    if (nameTokens.length) {
+      evidence = evidence.filter((item) => {
+        const hay = `${item.title} ${item.snippet} ${item.fullText ?? ""}`.toLowerCase();
+        const matches = nameTokens.filter((token) => hay.includes(token)).length;
+        return matches >= Math.min(2, nameTokens.length);
+      });
+    }
+  }
   console.log(
     `[meeting-blocks][sources] done in ${Date.now() - startedAt}ms returned=${evidenceRaw.length} relevant=${evidence.length}`,
   );

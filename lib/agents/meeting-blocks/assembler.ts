@@ -140,13 +140,23 @@ function sanitizeExecutiveClaims(data: MeetingOutput): MeetingOutput {
       "Ожидаемый эффект пилота необходимо подтвердить на исходной базе заказчика.";
   }
   if (data.proposal) {
+    const safeProposal = stripUnsupportedHighRiskClauses(data.proposal, evidence);
     data.proposal =
-      stripUnsupportedHighRiskClauses(data.proposal, evidence) ||
-      "Предлагается ограниченный пилот с измеримыми критериями результата и решением о масштабировании после проверки.";
+      safeProposal && !/\d[\d\s.,-]*\s*(?:муниципал|регион|недел|месяц|дн(?:я|ей)?|обращен)/iu.test(safeProposal)
+        ? safeProposal
+        : "Предлагается ограниченный пилот с измеримыми критериями результата и решением о масштабировании после проверки.";
   }
   if (data.askLadder) {
-    const safe = (value: string | undefined, fallback: string) =>
-      value ? stripUnsupportedHighRiskClauses(value, evidence) || fallback : undefined;
+    const safe = (value: string | undefined, fallback: string) => {
+      if (!value) return undefined;
+      const withoutUnsupportedMoney = stripUnsupportedHighRiskClauses(value, evidence);
+      // Масштаб, объём данных и сроки в askLadder должны приходить из user/CRM.
+      // Сам output не хранит provenance таких чисел, поэтому удаляем их консервативно.
+      if (/\d[\d\s.,-]*\s*(?:муниципал|регион|недел|месяц|дн(?:я|ей)?|обращен)/iu.test(withoutUnsupportedMoney)) {
+        return fallback;
+      }
+      return withoutUnsupportedMoney || fallback;
+    };
     data.askLadder = {
       max: safe(
         data.askLadder.max,
@@ -184,7 +194,7 @@ export function assembleMeetingBlocks({
   }
 
   const meetingGoal =
-    collected.meetingGoal || session.meetingGoal || session.focusTopic || "Определить целевой исход встречи";
+    session.meetingGoal || collected.meetingGoal || session.focusTopic || "Определить целевой исход встречи";
 
   const output: MeetingOutput = {
     meetingGoal,

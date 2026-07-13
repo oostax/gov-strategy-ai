@@ -53,7 +53,8 @@ export async function generateDossierBlock(
 ): Promise<DossierBlockOutput> {
   let { webEvidence, sources } = await prepareBlockSources(deps, searchQueries, {
     kind: "dossier",
-    limit: 4,
+    skipCache: true,
+    limit: 8,
   });
 
   // Умный поиск по персоне: точечная справка о ЛПР (с гейтом релевантности).
@@ -83,8 +84,10 @@ export async function generateDossierBlock(
     const year = new Date().getFullYear();
     const nameQuery = deps.lprName
       ? [
-          `${deps.lprName} ${deps.lprRole || ""} ${deps.region} официальная биография`.trim(),
-          `${deps.lprName} ${deps.region} заявления приоритеты ${year}`,
+          `"${deps.lprName}" ${deps.lprRole || ""} ${deps.region} официальная биография`.trim(),
+          `"${deps.lprName}" "${deps.region}" назначен министром официальный`,
+          `"${deps.lprName}" ${deps.ministry || deps.lprRole || "руководитель ведомства"} официальный сайт`,
+          `"${deps.lprName}" ${deps.region} заявления приоритеты ${year}`,
         ]
       : [];
     ({ webEvidence, sources } = await prepareBlockSources(
@@ -94,7 +97,7 @@ export async function generateDossierBlock(
         `${deps.region} ${deps.ministry || "министерство цифрового развития"} руководитель министр официальный состав`,
         `${deps.region} ${deps.ministry || "министерство"} биография министр образование назначение`,
       ],
-      { kind: "dossier", skipCache: true, limit: 4 },
+      { kind: "dossier", skipCache: true, limit: 8 },
     ));
     if (personFacts) webEvidence = `Справочные факты о персоне (Википедия):\n${personFacts}\n\n${webEvidence}`;
     userMessage = buildUserMessage(deps, webEvidence);
