@@ -8,6 +8,7 @@ import {
   assessTypedOutput,
   deriveFiscalStance,
   hasSupportedFiscalStance,
+  stripDecorativeSymbols,
   stripUnsupportedHighRiskClauses,
   stripUnsupportedNumericClauses,
 } from "../../lib/quality/meeting-output-quality.ts";
@@ -59,6 +60,10 @@ test("бюджетная позиция требует прямого подтв
   assert.equal(hasSupportedFiscalStance("Дефицит бюджета 13,8 млрд ₽", "Дефицит бюджета 13,8 млрд ₽"), true);
   assert.deepEqual(deriveFiscalStance(552.2, 566), { kind: "deficit", delta: 13.8 });
   assert.deepEqual(deriveFiscalStance(538.1, 533.6), { kind: "surplus", delta: 4.5 });
+});
+
+test("деловой текст очищается от декоративных эмодзи", () => {
+  assert.equal(stripDecorativeSymbols("1️⃣ GigaChat → 2️⃣ SberCloud"), "GigaChat → SberCloud");
 });
 
 test("неподтверждённый процент не попадает в главный тезис", () => {

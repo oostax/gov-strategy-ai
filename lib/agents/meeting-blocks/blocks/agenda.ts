@@ -75,7 +75,7 @@ export async function generateAgendaBlock(
 
   return {
     agenda,
-    askLadder: normalizeAskLadder(parsed.askLadder),
+    askLadder: normalizeAskLadder(parsed.askLadder) || fallbackAskLadder(deps),
     sources: normalizeSources(parsed.sources).concat(sources).slice(0, 6),
     hypotheses: normalizeHypotheses(parsed.hypotheses),
   };
@@ -157,6 +157,16 @@ function normalizeAgenda(value: unknown): AgendaBlock[] {
     result.push(normalized);
   }
   return result;
+}
+
+function fallbackAskLadder(deps: MeetingBlockDeps): AskLadder {
+  return {
+    max: "Согласовать масштабирование после достижения критериев пилота.",
+    target:
+      deps.session.meetingGoal?.trim() ||
+      "Согласовать ограниченный пилот, куратора и критерии результата.",
+    min: "Получить исходные данные, назначить ответственного и согласовать следующую рабочую встречу.",
+  };
 }
 
 function normalizeAskLadder(value: unknown): AskLadder | undefined {

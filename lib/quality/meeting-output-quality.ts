@@ -139,6 +139,16 @@ export function assessMeetingOutput(
       path: "sberActions",
     });
   }
+  if (options.taskType === "meeting_preparation") {
+    const ladder = asRecord(data.askLadder);
+    if (!ladder || !isNonEmptyString(ladder.target) || !isNonEmptyString(ladder.min)) {
+      issues.push({
+        code: "meeting.askLadder.incomplete",
+        message: "Лестница запросов должна содержать целевой и минимальный исход",
+        path: "askLadder",
+      });
+    }
+  }
 
   const deductions = issues.reduce((sum, issue) => {
     if (issue.code === "meeting.agenda.incomplete") return sum + 30;
@@ -241,6 +251,14 @@ export function stripUnsupportedNumericClauses(text: string, evidence: string): 
   });
 
   return kept.join(" ").trim();
+}
+
+export function stripDecorativeSymbols(text: string): string {
+  return text
+    .replace(/[0-9#*]?\uFE0F?\u20E3/gu, "")
+    .replace(/\p{Extended_Pictographic}/gu, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 }
 
 export function stripUnsupportedHighRiskClauses(text: string, evidence: string): string {

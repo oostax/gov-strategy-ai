@@ -175,10 +175,18 @@ function normalizeDossier(value: unknown, deps: MeetingBlockDeps, retrievedSourc
   // портфельном контексте карточки региона. Любая память MemPalace недостаточна:
   // в ней могут быть generated outputs и feedback (например оценка материала 2/5).
   const hasTrustedCrm = Boolean(deps.trustedCrmContext?.trim());
+  let known = normalizeTile(d.known, "fact", retrievedSources);
+  if (known?.source?.url && /wikipedia\.org/i.test(known.source.url)) {
+    known = {
+      text: `${name || "ЛПР"}${role ? ` указан в брифе как ${role}` : " найден в справочном источнике"}; должность и дату назначения требуется подтвердить официальным актом.`,
+      tier: "hypothesis",
+      source: known.source,
+    };
+  }
   return {
     name,
     role,
-    known: normalizeTile(d.known, "fact", retrievedSources),
+    known,
     motive: normalizeTile(d.motive, "hypothesis"),
     relationship: hasTrustedCrm ? normalizeTile(d.relationship, "crm") : undefined,
     ask: normalizeTile(d.ask, "ask"),

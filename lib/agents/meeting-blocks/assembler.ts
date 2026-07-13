@@ -15,6 +15,7 @@ import {
   assessMeetingOutput,
   isCompleteAgendaItem,
   isCompleteSberAction,
+  stripDecorativeSymbols,
   stripUnsupportedHighRiskClauses,
 } from "@/lib/quality/meeting-output-quality";
 
@@ -135,12 +136,14 @@ function sanitizeExecutiveClaims(data: MeetingOutput): MeetingOutput {
     .join("\n");
 
   if (data.mainThesis) {
+    const safeThesis = stripUnsupportedHighRiskClauses(stripDecorativeSymbols(data.mainThesis), evidence);
     data.mainThesis =
-      stripUnsupportedHighRiskClauses(data.mainThesis, evidence) ||
-      "Ожидаемый эффект пилота необходимо подтвердить на исходной базе заказчика.";
+      safeThesis && !/\d[\d\s.,-]*\s*(?:муниципал|регион|недел|месяц|дн(?:я|ей)?|обращен)/iu.test(safeThesis)
+        ? safeThesis
+        : "Ожидаемый эффект пилота необходимо подтвердить на исходной базе заказчика.";
   }
   if (data.proposal) {
-    const safeProposal = stripUnsupportedHighRiskClauses(data.proposal, evidence);
+    const safeProposal = stripUnsupportedHighRiskClauses(stripDecorativeSymbols(data.proposal), evidence);
     data.proposal =
       safeProposal && !/\d[\d\s.,-]*\s*(?:муниципал|регион|недел|месяц|дн(?:я|ей)?|обращен)/iu.test(safeProposal)
         ? safeProposal
@@ -149,7 +152,7 @@ function sanitizeExecutiveClaims(data: MeetingOutput): MeetingOutput {
   if (data.askLadder) {
     const safe = (value: string | undefined, fallback: string) => {
       if (!value) return undefined;
-      const withoutUnsupportedMoney = stripUnsupportedHighRiskClauses(value, evidence);
+      const withoutUnsupportedMoney = stripUnsupportedHighRiskClauses(stripDecorativeSymbols(value), evidence);
       // Масштаб, объём данных и сроки в askLadder должны приходить из user/CRM.
       // Сам output не хранит provenance таких чисел, поэтому удаляем их консервативно.
       if (/\d[\d\s.,-]*\s*(?:муниципал|регион|недел|месяц|дн(?:я|ей)?|обращен)/iu.test(withoutUnsupportedMoney)) {
