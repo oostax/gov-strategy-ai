@@ -1,3 +1,4 @@
+import { deriveFiscalStance } from "@/lib/quality/meeting-output-quality";
 import type {
   RegionAnalysisOutput,
   BudgetLandscape,
@@ -195,6 +196,40 @@ function asArray<T>(value: T[] | null | undefined): T[] {
   return Array.isArray(value) ? value : [];
 }
 
+function applyDeterministicFiscalStance(output: RegionAnalysisOutput): RegionAnalysisOutput {
+  const income = output.budgetLandscape?.totalIncomeValue;
+  const expense = output.budgetLandscape?.totalExpenseValue;
+  const fiscal = deriveFiscalStance(Number(income), Number(expense));
+  if (!fiscal) return output;
+  const incomeValue = income as number;
+  const expenseValue = expense as number;
+  const isDeficit = fiscal.kind === "deficit";
+  const stance = fiscal.kind === "deficit" ? "дефицит" : fiscal.kind === "surplus" ? "профицит" : "сбалансированный бюджет";
+  const budgetLine = `Доходы ${incomeValue.toLocaleString("ru-RU")} млрд ₽; расходы ${expenseValue.toLocaleString("ru-RU")} млрд ₽; ${stance}${fiscal.kind === "balanced" ? "" : ` ${fiscal.delta.toLocaleString("ru-RU")} млрд ₽`}.`;
+  const wrongStance = isDeficit ? /профицит/i : fiscal.kind === "surplus" ? /дефицит/i : /дефицит|профицит/i;
+
+  if (output.regionSummary) {
+    output.regionSummary.budgetTotal = budgetLine;
+    if (wrongStance.test(output.regionSummary.oneLiner || "")) {
+      output.regionSummary.oneLiner = `${budgetLine} Приоритеты региона следует оценивать по источнику финансирования и измеримому эффекту.`;
+    }
+  }
+  if (output.coreThesis) {
+    const combined = `${output.coreThesis.headline} ${output.coreThesis.surfaceSignal} ${output.coreThesis.hiddenReality} ${output.coreThesis.soWhat}`;
+    if (wrongStance.test(combined)) {
+      output.coreThesis = {
+        headline: `${fiscal.kind === "deficit" ? "Дефицитный" : fiscal.kind === "surplus" ? "Профицитный" : "Сбалансированный"} бюджет задаёт рамку для цифровых инициатив региона`,
+        surfaceSignal: budgetLine,
+        hiddenReality: output.coreThesis.hiddenReality,
+        soWhat: isDeficit
+          ? "Приоритизировать инициативы с подтверждённым источником финансирования, baseline и измеримым эффектом."
+          : "Направлять доступный ресурс только на инициативы с baseline, измеримым эффектом и владельцем результата.",
+      };
+    }
+  }
+  return output;
+}
+
 function normalizeRegionOutput(output: RegionAnalysisOutput): RegionAnalysisOutput {
   const normalized = output as RegionAnalysisOutput & {
     budgetLandscape?: Partial<BudgetLandscape>;
@@ -354,7 +389,7 @@ export function guardRegionOutput(
   output: RegionAnalysisOutput,
   evidence: GuardEvidence[],
 ): RegionAnalysisOutput {
-  const guarded = sanitizeRegionOutput(output);
+  const guarded = applyDeterministicFiscalStance(sanitizeRegionOutput(output));
   const gaps: DataGap[] = [];
 
   guarded.industryBreakdown = guarded.industryBreakdown.map((ind) => {

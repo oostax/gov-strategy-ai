@@ -3,6 +3,7 @@ import type { BlockDeps } from "../types";
 import type { RegionStakeholder } from "@/lib/schemas/structured-output";
 import { prepareBlockSources, callBlockLLM, parseBlockJson, refineByAgentInstructions, normalizeHypotheses, buildContextPreamble, pickString } from "./base";
 import { fetchWikiFacts } from "@/lib/integrations/open-data-retrieval";
+import { stripUnsupportedNumericClauses } from "@/lib/quality/meeting-output-quality";
 
 /** Ключевые слова для вытяжки руководства региона из статьи Википедии. */
 const OFFICIALS_WIKI_KEYWORDS = [
@@ -98,7 +99,7 @@ export async function generateStakeholdersBlock(
 
   parsed = await refineByAgentInstructions(parsed, "Руководители и ведомства", SYSTEM_PROMPT, userMessage, deps.agentInstructions);
 
-  let stakeholderMap = normalizeStakeholders(parsed.stakeholderMap);
+  let stakeholderMap = normalizeStakeholders(parsed.stakeholderMap, contextBlock);
   // Salvage: reasoning-модель нередко роняет массив stakeholderMap при наличии
   // источников — добираем его отдельным узким вызовом (только массив).
   if (stakeholderMap.length === 0) {
@@ -175,23 +176,39 @@ function extractLeadersFromText(text: string): RegionStakeholder[] {
 }
 
 /** Толерантная нормализация: синонимы ключей + региональный фильтр. */
-function normalizeStakeholders(value: unknown): RegionStakeholder[] {
+function normalizeStakeholders(value: unknown, evidenceText: string): RegionStakeholder[] {
   if (!Array.isArray(value)) return [];
   const out: RegionStakeholder[] = [];
+  const evidenceLower = evidenceText.toLowerCase();
   for (const item of value) {
     const name = pickString(item, ["name", "fullName", "fio", "ФИО", "person"]);
-    const role = pickString(item, ["role", "position", "title", "post", "должность"]);
+    let role = pickString(item, ["role", "position", "title", "post", "должность"]);
     if (!name || !role) continue;
+    const nameTokens = name.toLowerCase().split(/\s+/).filter((token) => token.length >= 4);
+    if (nameTokens.filter((token) => evidenceLower.includes(token)).length < Math.min(2, nameTokens.length)) {
+      continue;
+    }
+    if (!evidenceLower.includes(role.toLowerCase())) {
+      role = /президент|губернатор|раис|глав[аы]/i.test(role) ? "Глава региона" : role;
+    }
+    const achievements = stripUnsupportedNumericClauses(
+      pickString(item, ["achievements", "achievement", "results", "track"]),
+      evidenceText,
+    );
+    const recentNews = stripUnsupportedNumericClauses(
+      pickString(item, ["recentNews", "news", "recent", "latest"]),
+      evidenceText,
+    );
     const stk: RegionStakeholder = {
       id: pickString(item, ["id"]) || `stk_${out.length + 1}`,
       name,
       role,
       department: pickString(item, ["department", "dept", "agency", "ministry", "body", "org", "ведомство"]),
-      achievements: pickString(item, ["achievements", "achievement", "results", "track"]),
-      recentNews: pickString(item, ["recentNews", "news", "recent", "latest"]),
-      managedBudget: pickString(item, ["managedBudget", "budget", "resources"]) || undefined,
+      achievements,
+      recentNews,
+      managedBudget: undefined,
       managementInterest: pickString(item, ["managementInterest", "interest", "kpi", "responsibility"]),
-      relationshipToSber: pickString(item, ["relationshipToSber", "sber", "sberRelationship"]),
+      relationshipToSber: "",
       engagementPrinciple: pickString(item, ["engagementPrinciple", "engagement", "approach", "howToEngage"]),
     };
     if (!isRegionalStakeholder(stk)) continue;
@@ -221,7 +238,7 @@ async function salvageStakeholders(deps: BlockDeps, contextBlock: string): Promi
       label: "stakeholders.salvage",
     });
     const parsed = parseBlockJson(raw) as { stakeholderMap?: unknown };
-    return normalizeStakeholders(parsed.stakeholderMap);
+    return normalizeStakeholders(parsed.stakeholderMap, contextBlock);
   } catch {
     return [];
   }

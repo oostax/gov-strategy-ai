@@ -24,8 +24,10 @@ const BUDGET_TTL_MS = 30 * 24 * 60 * 60 * 1000;
  *     вендоров (site:zakupki провайдеры игнорируют, а сам портал под анти-ботом).
  * v4: competition охватывает не только ИТ, но и банки/финтех (Сбер — банк):
  *     запросы по обслуживанию бюджета, зарплатным проектам, эквайрингу, кредитам.
+ * v5: глобальный отсев словарей, магазинов и дизамбиг-страниц; старый шумный
+ *     кэш принудительно обновляется.
  */
-const CACHE_VERSION = 4;
+const CACHE_VERSION = 5;
 
 const BLOCK_QUERIES: Record<BlockKind, (region: string) => string[]> = {
   summary: (r) => [
@@ -131,7 +133,7 @@ export function isBlockFresh(entry: BlockCacheEntry | undefined, kind: BlockKind
   return age < ttlForBlock(kind);
 }
 
-function isBlockUseful(entry: BlockCacheEntry | undefined, kind: BlockKind): boolean {
+export function isBlockUseful(entry: BlockCacheEntry | undefined, kind: BlockKind): boolean {
   if (!entry) return false;
   const evidence = entry.evidence ?? [];
   const verified = evidence.filter((item) => item.contentFetched || /(^|\.)gov\.ru|rosstat|gks|pravo|budget|zakupki/i.test(item.url));

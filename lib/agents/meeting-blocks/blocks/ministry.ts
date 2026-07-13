@@ -20,9 +20,37 @@ import {
 import { MINISTRY_SYSTEM_PROMPT, volumeDirective } from "@/lib/prompts/meeting-blocks-contract";
 import { logBlockEvent } from "@/lib/agents/region-blocks/logger";
 import {
+  cacheKeyForRegion,
+  isBlockFresh,
+  isBlockUseful,
+  readRegionCache,
+} from "@/lib/agents/region-blocks/region-cache";
+import {
   hasSupportedFiscalStance,
   stripUnsupportedNumericClauses,
 } from "@/lib/quality/meeting-output-quality";
+
+async function appendRegionBudgetCache(
+  deps: MeetingBlockDeps,
+  webEvidence: string,
+  sources: Source[],
+): Promise<{ webEvidence: string; sources: Source[] }> {
+  try {
+    const cache = await readRegionCache(
+      cacheKeyForRegion(deps.session.regionId, deps.region),
+    );
+    const budget = cache?.blocks.budget;
+    if (!budget || !isBlockFresh(budget, "budget") || !isBlockUseful(budget, "budget")) {
+      return { webEvidence, sources };
+    }
+    return {
+      webEvidence: `${budget.evidenceText}\n\n${webEvidence}`,
+      sources: dedupeSources([...budget.sources, ...sources]),
+    };
+  } catch {
+    return { webEvidence, sources };
+  }
+}
 
 export async function generateMinistryBlock(
   deps: MeetingBlockDeps,
@@ -32,6 +60,7 @@ export async function generateMinistryBlock(
     kind: "ministry",
     limit: 6,
   });
+  ({ webEvidence, sources } = await appendRegionBudgetCache(deps, webEvidence, sources));
 
   let userMessage = buildUserMessage(deps, webEvidence);
   let raw = await callBlockLLM(MINISTRY_SYSTEM_PROMPT, userMessage, deps.agentInstructions, {
@@ -63,6 +92,7 @@ export async function generateMinistryBlock(
       ],
       { kind: "ministry", skipCache: true, limit: 6 },
     ));
+    ({ webEvidence, sources } = await appendRegionBudgetCache(deps, webEvidence, sources));
     userMessage = buildUserMessage(deps, webEvidence);
     raw = await callBlockLLM(MINISTRY_SYSTEM_PROMPT, userMessage, deps.agentInstructions, {
       sessionId: deps.session.id,

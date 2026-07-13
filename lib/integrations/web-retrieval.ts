@@ -81,6 +81,10 @@ const SEARCH_JUNK_HOSTS = [
   "market.yandex.ru",
   "ozon.ru",
   "wildberries.ru",
+  "kartaslov.ru",
+  "dic.academic.ru",
+  "respublica.ru",
+  "pishempravilno.ru",
 ];
 
 function sourceFromUrl(url: string) {

@@ -265,6 +265,17 @@ export function stripUnsupportedHighRiskClauses(text: string, evidence: string):
   return kept.join(" ").trim();
 }
 
+export function deriveFiscalStance(
+  income: number,
+  expense: number,
+): { kind: "deficit" | "surplus" | "balanced"; delta: number } | null {
+  if (!Number.isFinite(income) || !Number.isFinite(expense)) return null;
+  const delta = Math.round(Math.abs(income - expense) * 10) / 10;
+  if (expense > income) return { kind: "deficit", delta };
+  if (income > expense) return { kind: "surplus", delta };
+  return { kind: "balanced", delta: 0 };
+}
+
 export function hasSupportedFiscalStance(text: string, evidence: string): boolean {
   const lower = text.toLowerCase();
   const evidenceLower = evidence.toLowerCase();
