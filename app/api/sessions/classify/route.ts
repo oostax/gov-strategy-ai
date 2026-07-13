@@ -179,15 +179,19 @@ export async function POST(request: Request) {
 
     const parsed = tryParseJson<Record<string, unknown>>(raw);
     // Нормализуем clarifications: максимум 2 валидных вопроса, options — 2-4 строки.
-    const clarifications = normalizeClarifications(parsed.clarifications);
-    // Гарантия: если бриф неполный, а модель не задала вопросов — добавляем один
-    // КОНТЕКСТНЫЙ (под тип задачи и то, чего не хватает), а не шаблонный.
-    if (clarifications.length === 0) {
-      const gap = briefIncomplete(parsed);
-      if (gap.any) {
-        const fallback = fallbackClarification(String(parsed.taskType ?? ""), gap);
-        if (fallback) clarifications.push(fallback);
-      }
+    const gap = briefIncomplete(parsed);
+    const clarifications = gap.any ? normalizeClarifications(parsed.clarifications) : [];
+    // Формат и объём не являются пробелом знаний: все форматы доступны после
+    // генерации, а объём выбирается единым контролом в плане материала.
+    const forbiddenQuestion = /формат|pptx|docx|pdf|word|презентац|объ[её]м|коротко|глубоко/i;
+    for (let i = clarifications.length - 1; i >= 0; i--) {
+      if (forbiddenQuestion.test(clarifications[i].question)) clarifications.splice(i, 1);
+    }
+    // Гарантия: если бриф неполный, а после фильтра вопросов нет — добавляем один
+    // контекстный вопрос, привязанный к реальному пробелу.
+    if (clarifications.length === 0 && gap.any) {
+      const fallback = fallbackClarification(String(parsed.taskType ?? ""), gap);
+      if (fallback) clarifications.push(fallback);
     }
     parsed.clarifications = clarifications;
     return NextResponse.json({ suggestion: parsed, clarifications });

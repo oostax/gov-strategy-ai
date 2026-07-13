@@ -5,6 +5,8 @@ import { formatRegionContext, selectRelevantPlaybooks } from "@/lib/agents/promp
 import { formatSberProjectsForPrompt } from "@/lib/storage/sber-projects";
 import { getStorage } from "@/lib/storage/local-json-storage";
 import { getMemoryClient } from "@/lib/integrations/mempalace-client";
+import { canUseAsHistoricalUserInput } from "@/lib/quality/memory-provenance";
+import { assessTypedOutput } from "@/lib/quality/meeting-output-quality";
 import { fallbackRegionBlocksPlan, planRegionBlocks } from "./planner";
 import { generateSummaryBlock } from "./blocks/summary";
 import { generateBudgetBlock } from "./blocks/budget";
@@ -140,9 +142,8 @@ async function loadSberProjectsContext(session: SessionProfile, plan: RegionBloc
 }
 
 /**
- * Retrieve: подтягиваем из MemPalace прошлый контекст по региону/теме — прошлые
- * анализы и накопленные факты. CRM-слой (tier="crm"), не интернет. Best-effort:
- * сбой MemPalace не роняет генерацию.
+ * Retrieve only prior user input. Generated region summaries and feedback are
+ * excluded, otherwise an earlier hallucination becomes a «CRM fact» on rerun.
  */
 async function loadMemoryContext(plan: RegionBlocksPlan, prompt: string): Promise<string> {
   const query = [plan.region, plan.focusTopic, prompt].filter(Boolean).join(" ").trim();
@@ -150,9 +151,10 @@ async function loadMemoryContext(plan: RegionBlocksPlan, prompt: string): Promis
   try {
     const hits = await getMemoryClient().search(query);
     const lines = hits
+      .filter((hit) => canUseAsHistoricalUserInput(hit.sourceFile))
       .filter((hit) => hit.excerpt && hit.excerpt.trim().length > 0)
-      .slice(0, 5)
-      .map((hit) => `- ${hit.excerpt.replace(/\s+/g, " ").trim().slice(0, 400)}`);
+      .slice(0, 4)
+      .map((hit) => `- [предыдущий ввод пользователя] ${hit.excerpt.replace(/\s+/g, " ").trim().slice(0, 400)}`);
     return lines.length ? lines.join("\n") : "";
   } catch (error) {
     console.warn(`[blocks] MemPalace retrieve skipped: ${error instanceof Error ? error.message : error}`);
@@ -458,6 +460,10 @@ async function continueBlocksGeneration(
     }));
     const guarded = guardRegionOutput(assembled, guardEvidence);
     output = toTypedRegionOutput(guarded);
+    const quality = assessTypedOutput(output, { taskType: session.taskType });
+    if (!quality.ready) {
+      throw new Error(`Region quality gate failed: ${quality.issues.map((issue) => issue.code).join(", ")}`);
+    }
     await writeStructuredOutput(session.id, output);
   } catch (assemblyError) {
     const message = assemblyError instanceof Error ? assemblyError.message : String(assemblyError);

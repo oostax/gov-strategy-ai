@@ -11,6 +11,12 @@ import type {
   TypedOutput,
 } from "@/lib/schemas/structured-output";
 import { MEETING_BLOCK_ORDER, type MeetingBlockKind } from "./types";
+import {
+  assessMeetingOutput,
+  isCompleteAgendaItem,
+  isCompleteSberAction,
+  stripUnsupportedHighRiskClauses,
+} from "@/lib/quality/meeting-output-quality";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -103,9 +109,12 @@ function mergeBlockData(
 /** Санитайзер формы: убирает пустые элементы массивов (как в structured-generator). */
 export function sanitizeMeetingShape(data: MeetingOutput): MeetingOutput {
   if (Array.isArray(data.agenda)) {
-    // «Renderable» синхронно с дашбордом: достаточно topic ИЛИ sberSays,
-    // иначе строгий AND мог бы снова обнулить секцию сценария.
-    data.agenda = data.agenda.filter((block) => nonEmpty(block.topic) || nonEmpty(block.sberSays));
+    // Не маскируем частичный сценарий как готовый: каждая строка должна содержать
+    // время, тему, реплику Сбера, вопрос ЛПР и фиксируемое решение.
+    data.agenda = data.agenda.filter(isCompleteAgendaItem);
+  }
+  if (Array.isArray(data.sberActions)) {
+    data.sberActions = data.sberActions.filter(isCompleteSberAction);
   }
   if (Array.isArray(data.objections)) {
     data.objections = data.objections.filter((item) => nonEmpty(item.objection) && nonEmpty(item.response));
@@ -115,6 +124,40 @@ export function sanitizeMeetingShape(data: MeetingOutput): MeetingOutput {
   }
   if (Array.isArray(data.participants)) {
     data.participants = data.participants.filter((item) => nonEmpty(item.role) && nonEmpty(item.whatMatters));
+  }
+  return data;
+}
+
+function sanitizeExecutiveClaims(data: MeetingOutput): MeetingOutput {
+  const evidence = (data.sources ?? [])
+    .filter((source) => source.isVerified === true)
+    .map((source) => `${source.title ?? ""} ${source.excerpt ?? ""}`)
+    .join("\n");
+
+  if (data.mainThesis) {
+    data.mainThesis =
+      stripUnsupportedHighRiskClauses(data.mainThesis, evidence) ||
+      "Ожидаемый эффект пилота необходимо подтвердить на исходной базе заказчика.";
+  }
+  if (data.proposal) {
+    data.proposal =
+      stripUnsupportedHighRiskClauses(data.proposal, evidence) ||
+      "Предлагается ограниченный пилот с измеримыми критериями результата и решением о масштабировании после проверки.";
+  }
+  if (data.askLadder) {
+    const safe = (value: string | undefined, fallback: string) =>
+      value ? stripUnsupportedHighRiskClauses(value, evidence) || fallback : undefined;
+    data.askLadder = {
+      max: safe(
+        data.askLadder.max,
+        "Согласовать масштабирование после достижения критериев пилота.",
+      ),
+      target: safe(data.askLadder.target, data.meetingGoal),
+      min: safe(
+        data.askLadder.min,
+        "Согласовать передачу исходных данных и следующую рабочую встречу.",
+      ),
+    };
   }
   return data;
 }
@@ -166,7 +209,7 @@ export function assembleMeetingBlocks({
     hypotheses: hypotheses.slice(0, 8),
   };
 
-  return sanitizeMeetingShape(output);
+  return sanitizeExecutiveClaims(sanitizeMeetingShape(output));
 }
 
 function ministryHasContent(output: MeetingOutput): boolean {
@@ -182,26 +225,28 @@ function ministryHasContent(output: MeetingOutput): boolean {
 }
 
 /**
- * Мягкий гейт готовности (аналог assertRegionOutputReady): meetingGoal непустой,
- * портрет ведомства содержателен И заполнен хотя бы один из agenda/theses/objections.
- * Один пустой опциональный блок не роняет сессию — секция просто скрывается.
+ * Гейт готовности синхронизирован с тем, что видит руководитель. Для подготовки
+ * встречи обязательны полностью заполненные agenda и sberActions; тире в
+ * обязательных полях больше не считаются готовым материалом.
  */
-export function assertMeetingOutputReady(output: MeetingOutput) {
+export function assertMeetingOutputReady(
+  output: MeetingOutput,
+  taskType?: string,
+) {
   const issues: string[] = [];
-  if (!nonEmpty(output.meetingGoal)) issues.push("meetingGoal empty");
   if (!ministryHasContent(output)) issues.push("ministryPortrait empty");
-  const tacticalBlocks = [
-    (output.agenda?.length ?? 0) > 0,
-    (output.theses?.length ?? 0) > 0,
-    (output.objections?.length ?? 0) > 0,
-  ].filter(Boolean).length;
-  if (tacticalBlocks < 1) issues.push("no agenda/theses/objections");
+  const quality = assessMeetingOutput(output, { taskType });
+  issues.push(...quality.issues.map((issue) => issue.code));
   if (issues.length) {
     throw new Error(`Meeting output is not ready: ${issues.join(", ")}`);
   }
 }
 
-export function toTypedMeetingOutput(output: MeetingOutput): TypedOutput {
-  assertMeetingOutputReady(output);
-  return { kind: "meeting", data: output };
+export function toTypedMeetingOutput(
+  output: MeetingOutput,
+  taskType?: string,
+): TypedOutput {
+  const sanitized = sanitizeExecutiveClaims(sanitizeMeetingShape(output));
+  assertMeetingOutputReady(sanitized, taskType);
+  return { kind: "meeting", data: sanitized };
 }

@@ -4,7 +4,6 @@ import type { Playbook } from "@/lib/schemas/playbook";
 import type { RegionProfile } from "@/lib/schemas/region";
 import {
   outcomeLabels,
-  relationshipLabels,
   stageLabels,
 } from "@/lib/schemas/region";
 import type { SessionProfile } from "@/lib/schemas/session";
@@ -131,10 +130,11 @@ export function formatRegionContext(
   if (region.stakeholders?.length) {
     lines.push("Карта ЛПР (для использования в логике; ФИО без подтверждения не выводить):");
     for (const person of region.stakeholders.slice(0, 6)) {
-      const rel = person.relationship ? `, отношения: ${relationshipLabels[person.relationship]}` : "";
+      // relationship в старых/автосинхронизированных карточках мог быть выставлен
+      // техническим default="cold". Без provenance не подаём его модели как CRM-факт.
       const motive = person.motivation ? ` · управленческий интерес: ${person.motivation}` : "";
       const flags = person.redFlags ? ` · красные флаги: ${person.redFlags}` : "";
-      lines.push(`- ${person.fullName} — ${person.role}${person.department ? `, ${person.department}` : ""}${rel}${motive}${flags}`);
+      lines.push(`- ${person.fullName} — ${person.role}${person.department ? `, ${person.department}` : ""}${motive}${flags}`);
     }
   }
   if (region.news?.length) {

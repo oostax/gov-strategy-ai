@@ -1,5 +1,5 @@
 import type { MeetingBlockDeps, DossierBlockOutput } from "../types";
-import type { LprDossier, LprTile } from "@/lib/schemas/structured-output";
+import type { LprDossier, LprTile, Source } from "@/lib/schemas/structured-output";
 import {
   prepareBlockSources,
   callBlockLLM,
@@ -17,6 +17,7 @@ import {
 import { DOSSIER_SYSTEM_PROMPT, volumeDirective } from "@/lib/prompts/meeting-blocks-contract";
 import { fetchWikiFacts } from "@/lib/integrations/open-data-retrieval";
 import { logBlockEvent } from "@/lib/agents/region-blocks/logger";
+import { stripUnsupportedNumericClauses } from "@/lib/quality/meeting-output-quality";
 
 /** Ключевые слова биографии для вытяжки о персоне из Википедии. */
 const PERSON_WIKI_KEYWORDS = ["родил", "назначен", "образовани", "карьер", "должност", "министр", "губернатор", "возглав", "заместител"];
@@ -106,7 +107,7 @@ export async function generateDossierBlock(
     parsed = parseBlockJson(raw) as typeof parsed;
   }
 
-  const dossier = normalizeDossier(parsed.lprDossier, deps);
+  const dossier = normalizeDossier(parsed.lprDossier, deps, sources);
 
   return {
     lprDossier: dossier,
@@ -142,30 +143,41 @@ function hasKnown(parsed: { lprDossier?: unknown }): boolean {
   return isRecord(known) && hasUsefulText(known.text);
 }
 
-function normalizeTile(value: unknown, defaultTier: LprTile["tier"]): LprTile | undefined {
+function normalizeTile(
+  value: unknown,
+  defaultTier: LprTile["tier"],
+  retrievedSources: Source[] = [],
+): LprTile | undefined {
   if (!isRecord(value) || !hasUsefulText(value.text)) return undefined;
   const source = normalizeFactSource(value.source);
-  return {
-    text: value.text.trim(),
-    tier: coerceTier(value.tier, Boolean(source?.url), defaultTier),
-    source,
-  };
+  const tier = coerceTier(value.tier, Boolean(source?.url), defaultTier);
+  let text = value.text.trim();
+  if (tier === "fact") {
+    const normalizedUrl = source?.url?.replace(/\/$/, "");
+    const matched = normalizedUrl
+      ? retrievedSources.find((item) => item.url?.replace(/\/$/, "") === normalizedUrl)
+      : undefined;
+    const evidence = matched ? `${matched.title} ${matched.excerpt ?? ""}` : "";
+    text = stripUnsupportedNumericClauses(text, evidence);
+    if (!text) return undefined;
+  }
+  return { text, tier, source };
 }
 
-function normalizeDossier(value: unknown, deps: MeetingBlockDeps): LprDossier {
+function normalizeDossier(value: unknown, deps: MeetingBlockDeps, retrievedSources: Source[]): LprDossier {
   const d = isRecord(value) ? value : {};
   const name = hasUsefulText(d.name) ? d.name.trim() : deps.lprName || undefined;
   const role = hasUsefulText(d.role) ? d.role.trim() : deps.lprRole || undefined;
-  // relationship — это tier="crm": допускаем ТОЛЬКО когда MemPalace реально вернул
-  // прошлый контекст. Иначе модель склонна выдумать «тёплое отношение / оценка N/5»,
-  // а выдуманный CRM недопустим. Нет памяти — нет плитки relationship.
-  const hasMemory = Boolean(deps.memoryContext && deps.memoryContext.trim().length > 0);
+  // relationship — tier="crm": допускаем ТОЛЬКО при явно заполненном
+  // портфельном контексте карточки региона. Любая память MemPalace недостаточна:
+  // в ней могут быть generated outputs и feedback (например оценка материала 2/5).
+  const hasTrustedCrm = Boolean(deps.trustedCrmContext?.trim());
   return {
     name,
     role,
-    known: normalizeTile(d.known, "fact"),
+    known: normalizeTile(d.known, "fact", retrievedSources),
     motive: normalizeTile(d.motive, "hypothesis"),
-    relationship: hasMemory ? normalizeTile(d.relationship, "crm") : undefined,
+    relationship: hasTrustedCrm ? normalizeTile(d.relationship, "crm") : undefined,
     ask: normalizeTile(d.ask, "ask"),
   };
 }

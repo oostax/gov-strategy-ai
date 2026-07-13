@@ -1,47 +1,73 @@
 import Link from "next/link";
+import { promises as fs } from "fs";
 import {
   ArrowRight,
   Building2,
   ChevronRight,
+  CircleAlert,
+  FileCheck2,
   MapPin,
-  TrendingUp,
   Users,
-  Zap,
 } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { NewSessionTrigger } from "@/components/session/new-session-trigger";
 import { Card, CardContent } from "@/components/ui/card";
 import { getStorage } from "@/lib/storage/local-json-storage";
 import { getSessionTitle, taskLabels } from "@/lib/schemas/session";
+import { structuredOutputPath } from "@/lib/agents/region-blocks/storage";
+import { assessTypedOutput } from "@/lib/quality/meeting-output-quality";
+
+type SessionReadiness = { exists: boolean; ready: boolean; score: number };
 
 export default async function Home() {
-  const sessions = (await getStorage().listSessions()).slice(0, 6);
-  const regions = (await getStorage().listRegions()).slice(0, 5);
-  const playbooks = await getStorage().listPlaybooks();
-
-  // Stats
-  const totalSessions = (await getStorage().listSessions()).length;
-  const totalRegions = regions.length;
-  const totalRules = playbooks.reduce((sum, p) => sum + p.rules.length, 0);
+  const storage = getStorage();
+  const [allSessions, allRegions] = await Promise.all([
+    storage.listSessions(),
+    storage.listRegions(),
+  ]);
+  const sessions = allSessions.slice(0, 6);
+  const regions = allRegions.slice(0, 5);
+  const readinessEntries = await Promise.all(
+    allSessions.map(async (session) => {
+      try {
+        const raw = await fs.readFile(structuredOutputPath(session.id), "utf8");
+        const quality = assessTypedOutput(JSON.parse(raw), { taskType: session.taskType });
+        return [session.id, { exists: true, ready: quality.ready, score: quality.score }] as [string, SessionReadiness];
+      } catch {
+        return [session.id, { exists: false, ready: false, score: 0 }] as [string, SessionReadiness];
+      }
+    }),
+  );
+  const readinessById = new Map(readinessEntries);
+  const readyCount = readinessEntries.filter(([, status]) => status.ready).length;
+  const pendingCount = allSessions.length - readyCount;
+  const totalRegions = allRegions.length;
 
   return (
     <AppShell>
-      <div className="space-y-6">
-        {/* ── Hero: одна большая кнопка ── */}
+      <div className="space-y-5">
         <div>
-          <NewSessionTrigger />
+          <p className="text-xs font-semibold uppercase tracking-[0.16em] text-muted-foreground">
+            Рабочий контур
+          </p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight">Материалы и решения</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Сначала — материалы, требующие завершения; затем — готовые решения и региональный контекст.
+          </p>
         </div>
 
-        {/* ── Статистика ── */}
-        <div className="grid grid-cols-3 gap-2">
+        <NewSessionTrigger />
+
+        {/* ── Управленческие сигналы вместо служебных счётчиков ── */}
+        <div className="grid gap-2 sm:grid-cols-3">
           <Link href="/sessions">
-            <StatCard icon={Zap} value={totalSessions} label="Сессий" />
+            <StatCard icon={FileCheck2} value={readyCount} label="Материалов готово" tone="good" />
+          </Link>
+          <Link href="/sessions">
+            <StatCard icon={CircleAlert} value={pendingCount} label="Требуют завершения" tone={pendingCount ? "warn" : "neutral"} />
           </Link>
           <Link href="/regions">
-            <StatCard icon={MapPin} value={totalRegions} label="Регионов" />
-          </Link>
-          <Link href="/playbooks">
-            <StatCard icon={TrendingUp} value={totalRules} label="Правил" />
+            <StatCard icon={MapPin} value={totalRegions} label="Карточек регионов" tone="neutral" />
           </Link>
         </div>
 
@@ -72,9 +98,20 @@ export default async function Home() {
                       className="group flex items-center justify-between gap-2 rounded-xl px-3 py-2.5 transition hover:bg-muted/50"
                     >
                       <div className="min-w-0">
-                        <p className="truncate text-sm font-medium">
-                          {getSessionTitle(session)}
-                        </p>
+                        <div className="flex items-center gap-2">
+                          <p className="truncate text-sm font-medium">
+                            {getSessionTitle(session)}
+                          </p>
+                          <span className={readinessById.get(session.id)?.ready
+                            ? "shrink-0 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700"
+                            : "shrink-0 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"}>
+                            {readinessById.get(session.id)?.ready
+                              ? "Готов"
+                              : readinessById.get(session.id)?.exists
+                                ? "Требует проверки"
+                                : "Без результата"}
+                          </span>
+                        </div>
                         <p className="mt-0.5 text-xs text-muted-foreground">
                           {taskLabels[session.taskType]}
                           {session.region ? ` · ${session.region}` : ""}
@@ -121,16 +158,16 @@ export default async function Home() {
                       </span>
                       <div>
                         <p className="text-sm font-medium">{region.name}</p>
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                          <span className="inline-flex items-center gap-0.5">
+                        <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+                          <span className="inline-flex items-center gap-1">
                             <Users className="size-3" />
-                            {region.stakeholders.length}
+                            {region.stakeholders.length} ЛПР
                           </span>
-                          <span className="inline-flex items-center gap-0.5">
+                          <span className="inline-flex items-center gap-1">
                             <Building2 className="size-3" />
-                            {region.activeProjects.length}
+                            {region.activeProjects.length} проектов
                           </span>
-                          {region.budgetProfile && <span>{region.budgetProfile}</span>}
+                          {region.budgetProfile && <span className="line-clamp-1">{region.budgetProfile}</span>}
                         </div>
                       </div>
                     </div>
@@ -147,18 +184,31 @@ export default async function Home() {
 }
 
 function StatCard({
+  icon: Icon,
   value,
   label,
+  tone,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   value: number;
   label: string;
+  tone: "good" | "warn" | "neutral";
 }) {
+  const toneClass = tone === "good"
+    ? "bg-emerald-500/10 text-emerald-700"
+    : tone === "warn"
+      ? "bg-amber-500/10 text-amber-700"
+      : "bg-muted text-muted-foreground";
   return (
-    <Card className="rounded-xl">
-      <CardContent className="p-3 text-center">
-        <p className="text-xl font-bold tabular-nums leading-tight">{value}</p>
-        <p className="text-[10px] text-muted-foreground">{label}</p>
+    <Card className="rounded-xl transition hover:border-foreground/20">
+      <CardContent className="flex items-center gap-3 p-3.5">
+        <span className={`flex size-9 shrink-0 items-center justify-center rounded-lg ${toneClass}`}>
+          <Icon className="size-4" />
+        </span>
+        <div>
+          <p className="text-xl font-bold tabular-nums leading-tight">{value}</p>
+          <p className="text-[11px] text-muted-foreground">{label}</p>
+        </div>
       </CardContent>
     </Card>
   );

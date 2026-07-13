@@ -14,6 +14,7 @@ import {
   Lightbulb,
   MapPin,
   MessageSquare,
+  RefreshCw,
   Route,
   ShieldCheck,
   Target,
@@ -21,6 +22,7 @@ import {
   Users,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   taskLabels,
   urgencyLabels,
@@ -34,18 +36,24 @@ import type {
   TypedOutput,
 } from "@/lib/schemas/structured-output";
 import { cn } from "@/lib/utils";
+import { assessTypedOutput } from "@/lib/quality/meeting-output-quality";
 
 export function SessionFocusBar({
   id,
   session,
   output,
+  loading = false,
+  onRegenerate,
 }: {
   id?: string;
   session: SessionProfile;
   output: TypedOutput;
+  loading?: boolean;
+  onRegenerate?: () => void;
 }) {
   const focus = getFocus(output);
   const sections = getSections(output);
+  const quality = assessTypedOutput(output, { taskType: session.taskType });
 
   return (
     <div
@@ -69,6 +77,9 @@ export function SessionFocusBar({
               })}
             </Badge>
             {session.urgency && <Badge variant="ghost">{urgencyLabels[session.urgency]}</Badge>}
+            <Badge variant={quality.ready ? "secondary" : "outline"}>
+              {quality.ready ? "Структура проверена" : `Требуется проверка · ${quality.score}`}
+            </Badge>
           </div>
           <p className="line-clamp-2 text-sm font-semibold leading-snug">{focus.headline}</p>
           {focus.nextAction && (
@@ -78,20 +89,35 @@ export function SessionFocusBar({
           )}
         </div>
 
-        <div className="flex flex-wrap gap-1.5 lg:justify-end">
-          {sections.map((section) => (
-            <a
-              key={section.href}
-              href={section.href}
-              className={cn(
-                "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-xl border bg-card px-2.5 text-xs font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground",
-                section.primary && "border-primary/30 text-foreground",
-              )}
-            >
-              <section.icon className="size-3.5" />
-              {section.label}
-            </a>
-          ))}
+        <div className="min-w-0">
+          <div className="flex flex-nowrap gap-1.5 overflow-x-auto pb-1 lg:justify-end">
+            {sections.map((section) => (
+              <a
+                key={section.href}
+                href={section.href}
+                className={cn(
+                  "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-xl border bg-card px-2.5 text-xs font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground",
+                  section.primary && "border-primary/30 text-foreground",
+                )}
+              >
+                <section.icon className="size-3.5" />
+                {section.label}
+              </a>
+            ))}
+            {onRegenerate && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 shrink-0 rounded-xl"
+                disabled={loading}
+                onClick={onRegenerate}
+              >
+                <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
+                Пересобрать
+              </Button>
+            )}
+          </div>
         </div>
       </div>
     </div>

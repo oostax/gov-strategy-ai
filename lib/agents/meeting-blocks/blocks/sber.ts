@@ -13,6 +13,10 @@ import {
   pickString,
 } from "./base";
 import { SBER_SYSTEM_PROMPT, volumeDirective } from "@/lib/prompts/meeting-blocks-contract";
+import {
+  assessSberActions,
+  isCompleteSberAction,
+} from "@/lib/quality/meeting-output-quality";
 
 export async function generateSberBlock(
   deps: MeetingBlockDeps,
@@ -62,10 +66,16 @@ export async function generateSberBlock(
 
   const proposal = hasUsefulText(parsed.proposal) ? parsed.proposal.trim() : undefined;
   let sberActions = normalizeSberActions(parsed.sberActions);
-  // Salvage: модель заполняет proposal, но нередко роняет массив sberActions —
-  // добираем его отдельным узким вызовом с опорой на уже готовый оффер.
-  if (sberActions.length === 0) {
+  // Проверяем не только наличие массива, но и полный контракт каждого хода.
+  // Пустые dataNeeded/artifact/commercialNextStep делают блок непригодным.
+  if (!assessSberActions(sberActions).ready) {
     sberActions = await salvageSberActions(deps, contextBlock, proposal);
+  }
+  const actionsQuality = assessSberActions(sberActions);
+  if (!actionsQuality.ready) {
+    throw new Error(
+      `Sber actions incomplete after salvage: ${actionsQuality.complete}/${actionsQuality.total} complete`,
+    );
   }
 
   return {
@@ -109,7 +119,7 @@ async function salvageSberActions(
       });
       const parsed = parseBlockJson(raw) as { sberActions?: unknown };
       const actions = normalizeSberActions(parsed.sberActions);
-      if (actions.length > 0) return actions;
+      if (assessSberActions(actions).ready) return actions;
     } catch {
       /* следующая попытка */
     }
@@ -136,15 +146,16 @@ function normalizeSberActions(value: unknown): SberAction[] {
     if (!isRecord(item)) continue;
     // Толерантность к синонимам ключей (reasoning-модель варьирует названия).
     const asset = pickString(item, ["asset", "title", "name", "action", "solution", "product", "tool"]);
-    if (!asset) continue;
-    result.push({
+    const normalized: SberAction = {
       id: pickString(item, ["id"]) || `sber_${result.length + 1}`,
       asset,
       firstTwoWeeks: pickString(item, ["firstTwoWeeks", "firstSteps", "immediate", "next2weeks", "firstMoves"]),
       dataNeeded: pickString(item, ["dataNeeded", "data", "dataRequired", "needData"]),
       artifact: pickString(item, ["artifact", "deliverable", "leaveBehind", "output"]),
       commercialNextStep: pickString(item, ["commercialNextStep", "nextStep", "commercial", "next", "followUp"]),
-    });
+    };
+    if (!isCompleteSberAction(normalized)) continue;
+    result.push(normalized);
   }
   return result;
 }

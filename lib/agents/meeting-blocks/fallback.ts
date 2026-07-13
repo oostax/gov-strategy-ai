@@ -21,6 +21,8 @@ import {
   updateRun,
   writeStructuredOutput,
 } from "./storage";
+import { toTypedMeetingOutput } from "./assembler";
+import { canUseAsHistoricalUserInput } from "@/lib/quality/memory-provenance";
 
 export async function runMeetingSingleShotFallback(
   session: SessionProfile,
@@ -31,9 +33,10 @@ export async function runMeetingSingleShotFallback(
   const playbooks = await storage.listPlaybooks();
   const activePlaybooks = selectRelevantPlaybooks(session, playbooks);
   const sberCatalog = await storage.listSberCatalog().catch(() => []);
-  const memories = await getMemoryClient()
+  const memories = (await getMemoryClient()
     .search(`${session.focusTopic ?? ""} ${session.region ?? ""} ${prompt}`)
-    .catch(() => []);
+    .catch(() => []))
+    .filter((hit) => canUseAsHistoricalUserInput(hit.sourceFile));
   const webEvidence = await retrieveOpenSources({
     region: session.region,
     focusTopic: `${session.focusTopic ?? ""} ${prompt}`.trim(),
@@ -50,7 +53,11 @@ export async function runMeetingSingleShotFallback(
     sberCatalog,
   );
 
-  await writeStructuredOutput(session.id, output);
+  if (output.kind !== "meeting") {
+    throw new Error(`Meeting fallback returned unexpected output kind: ${output.kind}`);
+  }
+  const validated = toTypedMeetingOutput(output.data, session.taskType);
+  await writeStructuredOutput(session.id, validated);
 
   // Приводим прогон в состояние "ready", чтобы поллинг отдал одноходовой
   // результат, а не завис на статусе "error"/"assembling" от упавших блоков.

@@ -147,7 +147,7 @@ export function buildContextPreamble(deps: BlockDeps): string {
       ? `\nРелевантные реальные проекты Сбера для оценки конкурентной позиции:\n${deps.sberProjectsContext}`
       : "",
     deps.memoryContext
-      ? `\nПамять по прошлым анализам региона (MemPalace) — CRM-контекст (tier="crm"), НЕ интернет:\n${deps.memoryContext}`
+      ? `\nПредыдущий пользовательский ввод из MemPalace. Это историческая подсказка, НЕ подтверждённый факт и НЕ CRM; числа и статусы требуют независимого источника:\n${deps.memoryContext}`
       : "",
   ].filter(Boolean).join("\n\n");
 }

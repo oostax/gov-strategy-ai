@@ -11,9 +11,9 @@ export function NewSessionTrigger() {
           <Plus className="size-5" />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-lg font-semibold text-primary-foreground">Создать сессию</p>
+          <p className="text-lg font-semibold text-primary-foreground">Подготовить материал</p>
           <p className="mt-1 text-sm text-primary-foreground/70">
-            Выберите роль, тип материала и контекст. Агент подготовит рабочую сессию.
+            Опишите задачу одной фразой. Система определит тип, регион и состав материала.
           </p>
         </div>
         <ChevronRight className="size-4 shrink-0 text-primary-foreground/70 transition group-hover:translate-x-0.5" />

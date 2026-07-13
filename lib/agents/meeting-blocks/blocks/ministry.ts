@@ -19,6 +19,10 @@ import {
 } from "./base";
 import { MINISTRY_SYSTEM_PROMPT, volumeDirective } from "@/lib/prompts/meeting-blocks-contract";
 import { logBlockEvent } from "@/lib/agents/region-blocks/logger";
+import {
+  hasSupportedFiscalStance,
+  stripUnsupportedNumericClauses,
+} from "@/lib/quality/meeting-output-quality";
 
 export async function generateMinistryBlock(
   deps: MeetingBlockDeps,
@@ -69,7 +73,7 @@ export async function generateMinistryBlock(
     parsed = parseBlockJson(raw) as typeof parsed;
   }
 
-  const portrait = normalizePortrait(parsed.ministryPortrait);
+  const portrait = normalizePortrait(parsed.ministryPortrait, sources);
 
   return {
     ministryPortrait: portrait,
@@ -116,12 +120,18 @@ function normalizeStats(value: unknown): MinistryStat[] {
     if (!isRecord(item)) continue;
     if (!hasUsefulText(item.value) && !hasUsefulText(item.label)) continue;
     const source = normalizeFactSource(item.source);
+    const valueText = hasUsefulText(item.value) ? item.value.trim() : "";
+    let tier = coerceTier(item.tier, Boolean(source?.url));
+    if (tier === "fact" && valueText) {
+      const evidence = `${source?.title ?? ""} ${source?.excerpt ?? ""}`;
+      if (!stripUnsupportedNumericClauses(valueText, evidence)) tier = "hypothesis";
+    }
     result.push({
       id: hasUsefulText(item.id) ? item.id : `st_${result.length + 1}`,
       label: hasUsefulText(item.label) ? item.label.trim() : "",
-      value: hasUsefulText(item.value) ? item.value.trim() : "",
+      value: valueText,
       caption: hasUsefulText(item.caption) ? item.caption.trim() : "",
-      tier: coerceTier(item.tier, Boolean(source?.url)),
+      tier,
       source,
     });
   }
@@ -146,18 +156,26 @@ function normalizeItems(value: unknown): MinistryItem[] {
   return result;
 }
 
-function normalizePortrait(value: unknown): MinistryPortrait {
+function normalizePortrait(value: unknown, retrievedSources: Source[]): MinistryPortrait {
   if (!isRecord(value)) return {};
   const bw = value.budgetWindow;
-  const budgetWindow =
-    isRecord(bw) && (hasUsefulText(bw.signal) || hasUsefulText(bw.tension) || hasUsefulText(bw.decision))
-      ? {
-          signal: hasUsefulText(bw.signal) ? bw.signal.trim() : "",
-          tension: hasUsefulText(bw.tension) ? bw.tension.trim() : "",
-          decision: hasUsefulText(bw.decision) ? bw.decision.trim() : "",
-          sources: normalizeSources(bw.sources).filter((s) => s.url || s.title),
-        }
-      : undefined;
+  let budgetWindow: MinistryPortrait["budgetWindow"];
+  if (isRecord(bw) && (hasUsefulText(bw.signal) || hasUsefulText(bw.tension) || hasUsefulText(bw.decision))) {
+    const windowSources = normalizeSources(bw.sources).filter((s) => s.url || s.title);
+    // Проверяем бюджетную позицию только по реально найденным страницам, а не по
+    // source/excerpt, которые модель могла сгенерировать в своём JSON.
+    const evidence = retrievedSources.map((s) => `${s.title} ${s.excerpt ?? ""}`).join(" ");
+    let signal = hasUsefulText(bw.signal) ? bw.signal.trim() : "";
+    if (signal && !hasSupportedFiscalStance(signal, evidence)) {
+      signal = "Бюджетная позиция требует подтверждения по официальному закону о бюджете.";
+    }
+    budgetWindow = {
+      signal,
+      tension: hasUsefulText(bw.tension) ? bw.tension.trim() : "",
+      decision: hasUsefulText(bw.decision) ? bw.decision.trim() : "",
+      sources: windowSources,
+    };
+  }
   return {
     budgetWindow,
     stats: normalizeStats(value.stats),

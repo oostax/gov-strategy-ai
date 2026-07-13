@@ -20,8 +20,30 @@ export function ActionBar({ sessionId }: { sessionId: string }) {
   const [showShare, setShowShare] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  function exportAs(format: "docx" | "pptx" | "pdf") {
-    window.open(`/api/export?sessionId=${sessionId}&format=${format}`, "_blank");
+  async function exportAs(format: "docx" | "pptx" | "pdf") {
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/export?sessionId=${sessionId}&format=${format}`);
+      if (!response.ok) {
+        const data = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || "Экспорт не выполнен");
+      }
+      const blob = await response.blob();
+      const disposition = response.headers.get("content-disposition") || "";
+      const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] || `material.${format}`;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Экспорт не выполнен");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function toggleShare() {
@@ -63,13 +85,13 @@ export function ActionBar({ sessionId }: { sessionId: string }) {
   return (
     <Card className="rounded-2xl">
       <CardContent className="flex flex-wrap items-center gap-2 p-3">
-        <Button variant="outline" size="sm" onClick={() => exportAs("docx")}>
+        <Button variant="outline" size="sm" disabled={busy} onClick={() => exportAs("docx")}>
           <FileText className="size-3.5" /> Word
         </Button>
-        <Button variant="outline" size="sm" onClick={() => exportAs("pptx")}>
+        <Button variant="outline" size="sm" disabled={busy} onClick={() => exportAs("pptx")}>
           <Presentation className="size-3.5" /> Презентация
         </Button>
-        <Button variant="outline" size="sm" onClick={() => exportAs("pdf")}>
+        <Button variant="outline" size="sm" disabled={busy} onClick={() => exportAs("pdf")}>
           <FileDown className="size-3.5" /> PDF
         </Button>
         <div className="relative">

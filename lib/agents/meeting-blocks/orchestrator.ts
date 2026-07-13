@@ -6,6 +6,7 @@ import { formatSberProjectsForPrompt } from "@/lib/storage/sber-projects";
 import { getStorage } from "@/lib/storage/local-json-storage";
 import { getMemoryClient } from "@/lib/integrations/mempalace-client";
 import { logBlockEvent } from "@/lib/agents/region-blocks/logger";
+import { canUseAsHistoricalUserInput } from "@/lib/quality/memory-provenance";
 import { fallbackMeetingBlocksPlan, planMeetingBlocks } from "./planner";
 import { generateMinistryBlock } from "./blocks/ministry";
 import { generateDossierBlock } from "./blocks/dossier";
@@ -138,9 +139,9 @@ async function loadSberProjectsContext(plan: MeetingBlocksPlan, prompt: string) 
 }
 
 /**
- * Retrieve: подтягиваем из MemPalace прошлый контекст по ведомству/региону/ЛПР —
- * историю встреч, реальные договорённости и отношения со Сбером. Это CRM-слой
- * (tier="crm"), не интернет. MemPalace опционален: сбой не роняет генерацию.
+ * Retrieve only prior USER INPUT. Generated answers, feedback/evolution and
+ * distilled model summaries are excluded: they may contain hallucinations and
+ * must never be promoted to tier="crm" on a later run.
  */
 async function loadMemoryContext(plan: MeetingBlocksPlan, prompt: string): Promise<string> {
   const query = [plan.ministry, plan.lprName, plan.region, plan.focusTopic, prompt]
@@ -151,14 +152,34 @@ async function loadMemoryContext(plan: MeetingBlocksPlan, prompt: string): Promi
   try {
     const hits = await getMemoryClient().search(query);
     const lines = hits
+      .filter((hit) => canUseAsHistoricalUserInput(hit.sourceFile))
       .filter((hit) => hit.excerpt && hit.excerpt.trim().length > 0)
-      .slice(0, 5)
-      .map((hit) => `- ${hit.excerpt.replace(/\s+/g, " ").trim().slice(0, 400)}`);
+      .slice(0, 4)
+      .map((hit) => `- [предыдущий ввод пользователя] ${hit.excerpt.replace(/\s+/g, " ").trim().slice(0, 400)}`);
     return lines.length ? lines.join("\n") : "";
   } catch (error) {
     console.warn(`[meeting-blocks] MemPalace retrieve skipped: ${error instanceof Error ? error.message : error}`);
     return "";
   }
+}
+
+/**
+ * CRM-контекст берём только из явно заполненного портфельного слоя карточки
+ * региона. Автосинхронизированное отношение stakeholder не используем.
+ */
+function buildTrustedCrmContext(region: RegionProfile | null): string {
+  if (!region) return "";
+  const lines: string[] = [];
+  if (region.keyAccountManager?.trim()) lines.push(`Key-account: ${region.keyAccountManager.trim()}`);
+  if (region.relationshipManager?.trim()) lines.push(`RM госсектора: ${region.relationshipManager.trim()}`);
+  for (const project of region.activeProjects ?? []) {
+    lines.push(`Проект Сбера: ${project.product} — ${project.title}; стадия=${project.stage}${project.notes ? `; ${project.notes}` : ""}`);
+  }
+  for (const engagement of region.pastEngagements ?? []) {
+    lines.push(`История взаимодействия: ${engagement.topic}; исход=${engagement.outcome}${engagement.reason ? `; причина=${engagement.reason}` : ""}`);
+  }
+  if (region.sberNote?.trim()) lines.push(`Подтверждённая заметка карточки: ${region.sberNote.trim()}`);
+  return lines.slice(0, 8).join("\n");
 }
 
 /**
@@ -228,6 +249,7 @@ async function continueMeetingBlocks(
     regionContext: formatRegionContext(region, { includeSberPortfolio: true }),
     sberProjectsContext: await loadSberProjectsContext(plan, prompt),
     memoryContext: await loadMemoryContext(plan, prompt),
+    trustedCrmContext: buildTrustedCrmContext(region),
   };
   if (baseDeps.memoryContext) {
     console.log(`[meeting-blocks][memory] retrieved ${baseDeps.memoryContext.split("\n").length} prior context lines`);
@@ -343,7 +365,7 @@ async function continueMeetingBlocks(
   let output: TypedOutput;
   try {
     // Мягкий гейт готовности внутри toTypedMeetingOutput.
-    output = toTypedMeetingOutput(assembled);
+    output = toTypedMeetingOutput(assembled, session.taskType);
     await writeStructuredOutput(session.id, output);
   } catch (assemblyError) {
     const message = assemblyError instanceof Error ? assemblyError.message : String(assemblyError);

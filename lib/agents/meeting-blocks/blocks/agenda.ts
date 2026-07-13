@@ -13,6 +13,7 @@ import {
   pickString,
 } from "./base";
 import { AGENDA_SYSTEM_PROMPT, volumeDirective } from "@/lib/prompts/meeting-blocks-contract";
+import { assessAgenda, isCompleteAgendaItem } from "@/lib/quality/meeting-output-quality";
 
 export async function generateAgendaBlock(
   deps: MeetingBlockDeps,
@@ -59,10 +60,17 @@ export async function generateAgendaBlock(
   const parsed = parseBlockJson(raw) as { agenda?: unknown; askLadder?: unknown; sources?: unknown; hypotheses?: unknown };
 
   let agenda = normalizeAgenda(parsed.agenda);
-  // Salvage: reasoning-модель часто заполняет askLadder, но роняет массив agenda.
-  // Добираем его отдельным узким вызовом (только массив), как в region budget.ts.
-  if (agenda.length === 0) {
+  // Salvage нужен не только при пустом массиве. Reasoning-модель часто возвращает
+  // 4-5 строк с time/topic, но оставляет пустыми sberSays/askLpr/fixDecision.
+  // Такой массив визуально выглядит готовым, хотя провести по нему встречу нельзя.
+  if (!assessAgenda(agenda).ready) {
     agenda = await salvageAgenda(deps, contextBlock);
+  }
+  const agendaQuality = assessAgenda(agenda);
+  if (!agendaQuality.ready) {
+    throw new Error(
+      `Agenda incomplete after salvage: ${agendaQuality.complete}/${agendaQuality.total} complete`,
+    );
   }
 
   return {
@@ -86,18 +94,22 @@ async function salvageAgenda(deps: MeetingBlockDeps, contextBlock: string): Prom
     "Структура: вход/личный мостик → признание успеха → диагноз-вопрос (развилка) → оффер → фиксация next step.",
     'Пример одного элемента: {"id":"a_1","time":"0-3 мин","topic":"Вход и мостик","sberSays":"...","askLpr":"...","fixDecision":"..."}',
   ].join("\n");
-  try {
-    const raw = await callBlockLLM(AGENDA_SYSTEM_PROMPT, salvageMessage, deps.agentInstructions, {
-      sessionId: deps.session.id,
-      runId: deps.runId,
-      label: "agenda.salvage",
-      maxTokens: 1600,
-    });
-    const parsed = parseBlockJson(raw) as { agenda?: unknown };
-    return normalizeAgenda(parsed.agenda);
-  } catch {
-    return [];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const raw = await callBlockLLM(AGENDA_SYSTEM_PROMPT, salvageMessage, deps.agentInstructions, {
+        sessionId: deps.session.id,
+        runId: deps.runId,
+        label: `agenda.salvage.${attempt + 1}`,
+        maxTokens: 1800,
+      });
+      const parsed = parseBlockJson(raw) as { agenda?: unknown };
+      const agenda = normalizeAgenda(parsed.agenda);
+      if (assessAgenda(agenda).ready) return agenda;
+    } catch {
+      /* следующая попытка */
+    }
   }
+  return [];
 }
 
 /** Контекст тезисов/возражений/участия Сбера для сценария. */
@@ -132,16 +144,17 @@ function normalizeAgenda(value: unknown): AgendaBlock[] {
     const askLpr = pickString(item, ["askLpr", "ask", "question", "probe", "askQuestion"]);
     const fixDecision = pickString(item, ["fixDecision", "decision", "fix", "nextStep", "outcome", "result"]);
     const time = pickString(item, ["time", "timing", "slot", "duration"]);
-    // Достаточно любого из topic/sberSays — недостающее заполняем осмысленно.
-    if (!topic && !sberSays) continue;
-    result.push({
+    const normalized: AgendaBlock = {
       id: pickString(item, ["id"]) || `a_${result.length + 1}`,
       time: time || `${result.length * 6}-${(result.length + 1) * 6} мин`,
       topic: topic || sberSays,
-      sberSays: sberSays,
+      sberSays,
       askLpr,
       fixDecision,
-    });
+    };
+    // В UI строка считается готовой только при наличии всех пяти полей.
+    if (!isCompleteAgendaItem(normalized)) continue;
+    result.push(normalized);
   }
   return result;
 }

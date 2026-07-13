@@ -175,7 +175,7 @@ export async function buildRegionDraft(regionName: string): Promise<RegionDraft>
         role: asString(record.role),
         department: asString(record.department) || undefined,
         motivation: asString(record.motivation) || undefined,
-        relationship: "cold" as const,
+        // Открытые источники не определяют отношение к Сберу; поле остаётся пустым.
       };
       const result = stakeholderSchema.safeParse(candidate);
       return result.success ? result.data : null;

@@ -1,0 +1,15 @@
+{
+  "meetingGoal": "Согласовать пилот",
+  "mainThesis": "Пилот проверит эффект",
+  "proposal": "Провести пилот",
+  "sectionOrder": ["sber", "agenda"],
+  "agenda": [
+    {"time":"0-3 мин","topic":"Вход","sberSays":"","askLpr":"","fixDecision":""},
+    {"time":"3-10 мин","topic":"Диагностика","sberSays":"","askLpr":"","fixDecision":""},
+    {"time":"10-20 мин","topic":"Оффер","sberSays":"","askLpr":"","fixDecision":""},
+    {"time":"20-30 мин","topic":"Фиксация","sberSays":"","askLpr":"","fixDecision":""}
+  ],
+  "sberActions": [
+    {"asset":"GigaChat","firstTwoWeeks":"","dataNeeded":"","artifact":"","commercialNextStep":""}
+  ]
+}

@@ -63,7 +63,7 @@ export async function POST(
         department: s.department,
         motivation: s.managementInterest || "",
         redFlags: "",
-        relationship: "cold" as const,
+        // Отношение к Сберу неизвестно: не присваиваем технический default="cold".
         notes: [s.achievements, s.recentNews].filter(Boolean).join(" | ") || "",
       }));
     }

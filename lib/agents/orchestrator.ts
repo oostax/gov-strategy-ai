@@ -10,6 +10,7 @@ import { formatEvidenceForPrompt, retrieveOpenSources, type WebEvidence } from "
 import { roleLabels, taskLabels } from "@/lib/schemas/session";
 import { nowIso } from "@/lib/utils/dates";
 import { createId } from "@/lib/utils/ids";
+import { canUseAsHistoricalUserInput } from "@/lib/quality/memory-provenance";
 
 export type GenerationStep =
   | "storage"
@@ -45,7 +46,8 @@ export async function generateStrategyOutput(
   );
   const region = await resolveRegionForSession(session);
   await onStep?.("memory_search", "Ищу релевантную память в MemPalace");
-  const memories = await getMemoryClient().search(`${session.focusTopic ?? ""} ${session.region ?? ""} ${prompt}`);
+  const memories = (await getMemoryClient().search(`${session.focusTopic ?? ""} ${session.region ?? ""} ${prompt}`))
+    .filter((hit) => canUseAsHistoricalUserInput(hit.sourceFile));
   await onStep?.("web_research", "Ищу открытые источники и факты");
   const webEvidence = await retrieveOpenSources({
     region: session.region,

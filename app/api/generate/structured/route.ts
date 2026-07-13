@@ -17,6 +17,8 @@ import type { WebEvidence } from "@/lib/integrations/web-retrieval";
 import { writeProgress, clearProgress } from "@/lib/utils/generation-progress";
 import { canonicalRegionName } from "@/lib/data/region-normalization";
 import { cacheKeyForRegion, readRegionCache } from "@/lib/agents/region-blocks/region-cache";
+import { assessTypedOutput } from "@/lib/quality/meeting-output-quality";
+import { canUseAsHistoricalUserInput } from "@/lib/quality/memory-provenance";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -248,9 +250,9 @@ async function runGeneration(sessionId: string, prompt: string, session: Session
 
     await writeProgress(sessionId, "memory_search", "Поиск в MemPalace", 12);
     const sberCatalog = await storage.listSberCatalog();
-    const memories = await getMemoryClient().search(
+    const memories = (await getMemoryClient().search(
       `${session.focusTopic ?? ""} ${session.region ?? ""} ${prompt}`,
-    );
+    )).filter((hit) => canUseAsHistoricalUserInput(hit.sourceFile));
 
     await writeProgress(sessionId, "web_research", "Поиск открытых источников", 22);
     let webEvidence = await retrieveOpenSources({
@@ -268,21 +270,38 @@ async function runGeneration(sessionId: string, prompt: string, session: Session
     }
 
     await writeProgress(sessionId, "evidence_pack", "Извлечение подтверждённых фактов", 30);
-    const generated = await generateStructured(
+    const evidenceText = formatEvidenceForPrompt(webEvidence);
+    const generateOnce = (refinementPrompt: string) => generateStructured(
       session,
       activePlaybooks,
       region,
       memories,
-      formatEvidenceForPrompt(webEvidence),
-      prompt,
+      evidenceText,
+      refinementPrompt,
       sberCatalog,
       (percent, label) => {
         writeProgress(sessionId, "llm_generate", label, 30 + Math.round(percent * 0.5));
       },
     );
+    let generated = await generateOnce(prompt);
 
     await writeProgress(sessionId, "assembly", "Сборка и обогащение результата", 85);
-    const result = await enhanceRegionOutput(generated, webEvidence);
+    let result = await enhanceRegionOutput(generated, webEvidence);
+    let quality = assessTypedOutput(result, { taskType: session.taskType });
+    if (!quality.ready) {
+      await writeProgress(sessionId, "quality_retry", "Исправление неполных блоков", 88);
+      const correction = quality.issues.map((issue) => `- ${issue.message}`).join("\n");
+      generated = await generateOnce(
+        [prompt, "", "Исправь результат по обязательному quality gate:", correction]
+          .filter(Boolean)
+          .join("\n"),
+      );
+      result = await enhanceRegionOutput(generated, webEvidence);
+      quality = assessTypedOutput(result, { taskType: session.taskType });
+    }
+    if (!quality.ready) {
+      throw new Error(`Quality gate failed: ${quality.issues.map((issue) => issue.code).join(", ")}`);
+    }
 
     await writeProgress(sessionId, "save", "Сохранение результата", 95);
     await fs.unlink(errorPath).catch(() => undefined);

@@ -32,7 +32,7 @@ export function SourcesFooter({
             </h3>
             <div className="mt-2 flex flex-wrap gap-1.5 text-[11px]">
               <span className="rounded-full bg-emerald-500/10 px-2 py-1 font-medium text-emerald-700">
-                подтверждено: {verified.length}
+                текст извлечён: {verified.length}
               </span>
               {unverified.length > 0 && (
                 <span className="rounded-full bg-muted px-2 py-1 font-medium text-muted-foreground">
@@ -65,10 +65,10 @@ export function SourcesFooter({
           <div className="mt-4 grid gap-3 lg:grid-cols-2">
             <div className="space-y-1.5">
               <p className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
-                <CheckCircle2 className="size-3.5 text-emerald-600" /> Подтверждённые материалы
+                <CheckCircle2 className="size-3.5 text-emerald-600" /> Страницы с извлечённым текстом
               </p>
               {verified.length === 0 ? (
-                <p className="text-xs text-muted-foreground">Подтверждённые материалы не найдены.</p>
+                <p className="text-xs text-muted-foreground">Полный текст источников не извлечён.</p>
               ) : (
                 verified.map((src, idx) => (
                   <div key={idx} className="rounded-lg border bg-muted/20 px-2.5 py-2">

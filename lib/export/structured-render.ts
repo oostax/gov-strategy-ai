@@ -7,23 +7,34 @@ import type { DocBlock, DocModel, DocSection } from "./structured-doc";
  * Собираем OOXML вручную — как в docx.ts / pptx.ts, но с поддержкой настоящих таблиц.
  */
 
+function compactLinks(text: string): string {
+  return text.replace(/https?:\/\/[^\s)]+/gi, (raw) => {
+    try {
+      const url = new URL(raw);
+      return `[${url.hostname.replace(/^www\./, "")}]`;
+    } catch {
+      return "[источник]";
+    }
+  });
+}
+
 // ── DOCX ─────────────────────────────────────────────────────────────────────
 
 function docxParagraph(text: string, style?: string): string {
-  const safe = xmlEscape(text || " ");
+  const safe = xmlEscape(compactLinks(text || " "));
   const pPr = style ? `<w:pPr><w:pStyle w:val="${style}"/></w:pPr>` : "";
   return `<w:p>${pPr}<w:r><w:t xml:space="preserve">${safe}</w:t></w:r></w:p>`;
 }
 
 function docxListItem(text: string): string {
-  const safe = xmlEscape(text || " ");
+  const safe = xmlEscape(compactLinks(text || " "));
   return `<w:p><w:pPr><w:pStyle w:val="ListParagraph"/><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t xml:space="preserve">${safe}</w:t></w:r></w:p>`;
 }
 
 function docxTableCell(text: string, header: boolean): string {
-  const safe = xmlEscape(text || " ");
+  const safe = xmlEscape(compactLinks(text || " "));
   const shd = header ? `<w:shd w:val="clear" w:color="auto" w:fill="EEF2F7"/>` : "";
-  const runPr = header ? `<w:rPr><w:b/><w:sz w:val="18"/></w:rPr>` : `<w:rPr><w:sz w:val="18"/></w:rPr>`;
+  const runPr = header ? `<w:rPr><w:b/><w:sz w:val="20"/></w:rPr>` : `<w:rPr><w:sz w:val="20"/></w:rPr>`;
   return `<w:tc><w:tcPr><w:tcBorders><w:top w:val="single" w:sz="4" w:color="D0D5DD"/><w:left w:val="single" w:sz="4" w:color="D0D5DD"/><w:bottom w:val="single" w:sz="4" w:color="D0D5DD"/><w:right w:val="single" w:sz="4" w:color="D0D5DD"/></w:tcBorders>${shd}</w:tcPr><w:p><w:r>${runPr}<w:t xml:space="preserve">${safe}</w:t></w:r></w:p></w:tc>`;
 }
 
@@ -43,7 +54,7 @@ function docxTable(headers: string[], rows: string[][]): string {
   };
   const headerRow = headers.length ? docxTableRow(pad(headers), true) : "";
   const bodyRows = rows.map((r) => docxTableRow(pad(r), false)).join("");
-  return `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="9600" w:type="dxa"/><w:tblLayout w:type="fixed"/></w:tblPr><w:tblGrid>${grid}</w:tblGrid>${headerRow}${bodyRows}</w:tbl>${docxParagraph(" ")}`;
+  return `<w:tbl><w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="9600" w:type="dxa"/><w:tblLayout w:type="autofit"/><w:tblCellMar><w:top w:w="80" w:type="dxa"/><w:left w:w="90" w:type="dxa"/><w:bottom w:w="80" w:type="dxa"/><w:right w:w="90" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid>${grid}</w:tblGrid>${headerRow}${bodyRows}</w:tbl>${docxParagraph(" ")}`;
 }
 
 function docxBlock(block: DocBlock): string {
@@ -69,7 +80,7 @@ export function buildStructuredDocx(model: DocModel): Uint8Array {
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
   <w:body>
     ${bodyParts.join("")}
-    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1134" w:right="1134" w:bottom="1134" w:left="1134" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="900" w:right="900" w:bottom="900" w:left="900" w:header="500" w:footer="500" w:gutter="0"/></w:sectPr>
   </w:body>
 </w:document>`;
 
@@ -149,7 +160,10 @@ function sectionToBullets(section: DocSection): string[] {
       }
     }
   }
-  return out.filter((line) => line && line.trim().length > 0);
+  return out
+    .filter((line) => line && line.trim().length > 0)
+    .map((line) => compactLinks(line.trim()))
+    .map((line) => line.length > 420 ? `${line.slice(0, 417)}…` : line);
 }
 
 function buildSlideXml(slide: Slide, slideIdx: number): string {
@@ -158,7 +172,7 @@ function buildSlideXml(slide: Slide, slideIdx: number): string {
     ? slide.bullets
         .map(
           (b) =>
-            `<a:p><a:pPr lvl="0" indent="-228600"><a:buChar char="•"/></a:pPr><a:r><a:rPr lang="ru-RU" sz="1400" dirty="0"/><a:t>${xmlEscape(b)}</a:t></a:r></a:p>`,
+            `<a:p><a:pPr lvl="0" indent="-228600" marL="260000" spaceAfter="80000"><a:buChar char="•"/></a:pPr><a:r><a:rPr lang="ru-RU" sz="1800" dirty="0"/><a:t>${xmlEscape(b)}</a:t></a:r></a:p>`,
         )
         .join("")
     : `<a:p><a:endParaRPr lang="ru-RU" sz="1400"/></a:p>`;
@@ -171,7 +185,7 @@ function buildSlideXml(slide: Slide, slideIdx: number): string {
       <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
       <p:sp>
         <p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>
-        <p:spPr><a:xfrm><a:off x="457200" y="365125"/><a:ext cx="8229600" cy="800000"/></a:xfrm></p:spPr>
+        <p:spPr><a:xfrm><a:off x="457200" y="365125"/><a:ext cx="11277600" cy="800000"/></a:xfrm></p:spPr>
         <p:txBody>
           <a:bodyPr/><a:lstStyle/>
           <a:p><a:r><a:rPr lang="ru-RU" sz="2800" b="1"/><a:t>${titleSafe}</a:t></a:r></a:p>
@@ -179,7 +193,7 @@ function buildSlideXml(slide: Slide, slideIdx: number): string {
       </p:sp>
       <p:sp>
         <p:nvSpPr><p:cNvPr id="3" name="Content"/><p:cNvSpPr><a:spLocks noGrp="1"/></p:cNvSpPr><p:nvPr><p:ph idx="1"/></p:nvPr></p:nvSpPr>
-        <p:spPr><a:xfrm><a:off x="457200" y="1300000"/><a:ext cx="8229600" cy="5000000"/></a:xfrm></p:spPr>
+        <p:spPr><a:xfrm><a:off x="457200" y="1300000"/><a:ext cx="11277600" cy="5000000"/></a:xfrm></p:spPr>
         <p:txBody>
           <a:bodyPr/><a:lstStyle/>
           ${bulletsXml}
@@ -198,13 +212,13 @@ export function buildStructuredPptx(model: DocModel): Uint8Array {
   });
   for (const section of model.sections) {
     const bullets = sectionToBullets(section);
-    // Разбиваем длинные секции на несколько слайдов по 8 пунктов.
-    if (bullets.length <= 8) {
+    // Не превращаем презентацию в страницу мелкого текста: максимум 5 тезисов.
+    if (bullets.length <= 5) {
       slides.push({ title: section.heading, bullets });
     } else {
-      for (let i = 0; i < bullets.length; i += 8) {
-        const part = bullets.slice(i, i + 8);
-        const suffix = i === 0 ? "" : ` (${Math.floor(i / 8) + 1})`;
+      for (let i = 0; i < bullets.length; i += 5) {
+        const part = bullets.slice(i, i + 5);
+        const suffix = i === 0 ? "" : ` (${Math.floor(i / 5) + 1})`;
         slides.push({ title: `${section.heading}${suffix}`, bullets: part });
       }
     }
@@ -222,7 +236,7 @@ export function buildStructuredPptx(model: DocModel): Uint8Array {
   <p:sldIdLst>
     ${slides.map((_, idx) => `<p:sldId id="${256 + idx}" r:id="rId${idx + 1}"/>`).join("")}
   </p:sldIdLst>
-  <p:sldSz cx="9144000" cy="6858000" type="screen4x3"/>
+  <p:sldSz cx="12192000" cy="6858000" type="screen16x9"/>
   <p:notesSz cx="6858000" cy="9144000"/>
 </p:presentation>`;
 
@@ -265,7 +279,7 @@ export function buildStructuredPptx(model: DocModel): Uint8Array {
 // ── PDF (через HTML + puppeteer) ──────────────────────────────────────────────
 
 function esc(value: unknown): string {
-  return String(value ?? "")
+  return compactLinks(String(value ?? ""))
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
@@ -280,7 +294,8 @@ function htmlBlock(block: DocBlock): string {
     const body = block.rows
       .map((row) => `<tr>${row.map((cell) => `<td>${esc(cell)}</td>`).join("")}</tr>`)
       .join("");
-    return `<table>${head}<tbody>${body}</tbody></table>`;
+    const tableClass = block.headers.length >= 5 ? "wide" : "";
+    return `<table class="${tableClass}">${head}<tbody>${body}</tbody></table>`;
   }
   if (block.bullet) {
     return `<ul>${block.lines.map((line) => `<li>${esc(line)}</li>`).join("")}</ul>`;
@@ -303,21 +318,27 @@ export function buildStructuredHtml(model: DocModel): string {
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
+  <title>${esc(model.title)}</title>
   <style>
-    @page { size: A4; margin: 16mm; }
-    body { font-family: Inter, Arial, sans-serif; color: #111; background: #fff; font-size: 11px; line-height: 1.45; }
-    .eyebrow { color: #6b7280; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; }
-    h1 { font-size: 24px; margin: 6px 0 4px; }
-    h2 { font-size: 15px; margin: 20px 0 8px; padding-bottom: 4px; border-bottom: 1px solid #e5e7eb; }
-    p { margin: 0 0 6px; }
-    p.note { color: #6b7280; font-style: italic; margin-top: -2px; }
-    ul { margin: 0 0 8px; padding-left: 18px; }
-    li { margin: 2px 0; }
-    .block { page-break-inside: avoid; }
-    table { width: 100%; border-collapse: collapse; margin: 4px 0 10px; font-size: 10px; }
-    th, td { border: 1px solid #d0d5dd; padding: 5px 7px; text-align: left; vertical-align: top; }
-    th { background: #eef2f7; font-weight: 700; }
-    .hero { border: 1px solid #e5e7eb; border-radius: 14px; padding: 16px; background: linear-gradient(135deg,#f8fafc,#fff); margin-bottom: 8px; }
+    @page { size: A4; margin: 12mm 13mm 14mm; }
+    * { box-sizing: border-box; }
+    body { font-family: Inter, Arial, sans-serif; color: #111827; background: #fff; font-size: 12px; line-height: 1.5; }
+    .eyebrow { color: #667085; font-size: 9px; text-transform: uppercase; letter-spacing: .1em; }
+    h1 { font-size: 25px; line-height: 1.18; margin: 8px 0 2px; letter-spacing: -.02em; }
+    h2 { font-size: 16px; margin: 18px 0 8px; padding-bottom: 5px; border-bottom: 1px solid #dfe3e8; break-after: avoid; }
+    p { margin: 0 0 7px; orphans: 3; widows: 3; }
+    p.note { color: #667085; font-style: italic; margin-top: -2px; }
+    ul { margin: 0 0 10px; padding-left: 20px; }
+    li { margin: 3px 0; break-inside: avoid; }
+    .block { margin-bottom: 10px; }
+    table { width: 100%; border-collapse: collapse; table-layout: auto; margin: 6px 0 12px; font-size: 10.5px; break-inside: auto; }
+    table.wide { font-size: 9.5px; }
+    thead { display: table-header-group; }
+    tr { break-inside: avoid; }
+    th, td { border: 1px solid #d0d5dd; padding: 6px 7px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+    th { background: #eef2f7; font-weight: 700; color: #344054; }
+    tbody tr:nth-child(even) { background: #fafbfc; }
+    .hero { border: 1px solid #dfe3e8; border-left: 4px solid #111827; border-radius: 12px; padding: 18px 20px; background: #f8fafc; margin-bottom: 12px; break-after: avoid; }
   </style>
 </head>
 <body>
@@ -339,7 +360,7 @@ export async function buildStructuredPdf(model: DocModel): Promise<Uint8Array> {
   try {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: "networkidle0" });
-    const buffer = await page.pdf({ format: "A4", printBackground: true });
+    const buffer = await page.pdf({ format: "A4", printBackground: true, preferCSSPageSize: true });
     return new Uint8Array(buffer);
   } finally {
     await browser.close();

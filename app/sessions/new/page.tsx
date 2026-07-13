@@ -41,7 +41,6 @@ import {
 import {
   blocksForTask,
   defaultEnabledIds,
-  isBlockDefaultOn,
   VOLUME_LABEL,
   type MaterialBlock,
 } from "@/lib/schemas/material-plan";
@@ -156,66 +155,67 @@ type Turn =
  * пересчёт включённости НЕ-core блоков (порядок пользователя сохраняется).
  */
 type PlanState = {
+  taskType: TaskType;
   order: string[];
   enabled: Set<string>;
   volume: DetailLevel;
 };
 
-function useMaterialPlan(taskType: TaskType, volume: DetailLevel) {
-  const [state, setState] = useState<PlanState>(() => ({
-    order: blocksForTask(taskType).map((b) => b.id),
+function defaultPlanState(taskType: TaskType, volume: DetailLevel): PlanState {
+  return {
+    taskType,
+    order: blocksForTask(taskType).map((block) => block.id),
     enabled: new Set(defaultEnabledIds(taskType, volume)),
     volume,
-  }));
+  };
+}
 
-  // Смена типа задачи — полный сброс к дефолту нового типа для текущего объёма.
-  useEffect(() => {
-    setState({
-      order: blocksForTask(taskType).map((b) => b.id),
-      enabled: new Set(defaultEnabledIds(taskType, volume)),
-      volume,
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [taskType]);
+function normalizePlanState(
+  state: PlanState,
+  taskType: TaskType,
+  volume: DetailLevel,
+): PlanState {
+  if (state.taskType !== taskType) return defaultPlanState(taskType, volume);
+  if (state.volume === volume) return state;
+  return {
+    ...state,
+    volume,
+    enabled: new Set(defaultEnabledIds(taskType, volume)),
+  };
+}
 
-  // Смена объёма (из единого контрола) — пересчёт дефолтной включённости
-  // НЕ-core блоков; порядок и core-блоки не трогаем.
-  useEffect(() => {
-    if (state.volume === volume) return;
-    setState((prev) => {
-      const next = new Set<string>();
-      for (const block of blocksForTask(taskType)) {
-        if (isBlockDefaultOn(block, volume)) next.add(block.id);
-      }
-      return { ...prev, enabled: next, volume };
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [volume]);
+function useMaterialPlan(taskType: TaskType, volume: DetailLevel) {
+  const [storedState, setState] = useState<PlanState>(() => defaultPlanState(taskType, volume));
+  // Смена типа/объёма выводится чисто во время render. Реальное состояние
+  // фиксируется при следующем пользовательском действии без каскадного effect.
+  const state = normalizePlanState(storedState, taskType, volume);
 
   const toggle = useCallback(
     (block: MaterialBlock) => {
       if (block.core) return; // core-блоки нельзя выключить
       setState((prev) => {
-        const enabled = new Set(prev.enabled);
+        const base = normalizePlanState(prev, taskType, volume);
+        const enabled = new Set(base.enabled);
         if (enabled.has(block.id)) enabled.delete(block.id);
         else enabled.add(block.id);
-        return { ...prev, enabled };
+        return { ...base, enabled };
       });
     },
-    [],
+    [taskType, volume],
   );
 
   // Перестановка: перемещает блок с позиции from на позицию to (drag&drop).
   const move = useCallback((from: number, to: number) => {
     setState((prev) => {
-      if (from === to || from < 0 || to < 0) return prev;
-      const order = [...prev.order];
-      if (from >= order.length || to >= order.length) return prev;
+      const base = normalizePlanState(prev, taskType, volume);
+      if (from === to || from < 0 || to < 0) return base;
+      const order = [...base.order];
+      if (from >= order.length || to >= order.length) return base;
       const [moved] = order.splice(from, 1);
       order.splice(to, 0, moved);
-      return { ...prev, order };
+      return { ...base, order };
     });
-  }, []);
+  }, [taskType, volume]);
 
   /** Итог для submit: включённые id в текущем порядке. */
   const enabledOrdered = state.order.filter((id) => state.enabled.has(id));
@@ -232,42 +232,51 @@ function computeReadiness(input: {
   hasRegion: boolean;
   hasRegionProfile: boolean;
   hasMeetingWith: boolean;
+  hasMeetingGoal: boolean;
+  hasMeetingContext: boolean;
   hasFocus: boolean;
   urgency: UrgencyLevel;
 }): { percent: number; reasons: string[]; tone: "low" | "mid" | "high" } {
-  const { isMeeting, hasRegion, hasRegionProfile, hasMeetingWith, hasFocus, urgency } = input;
-  let score = 40; // базовый уровень: система всегда что-то соберёт из открытых источников
+  const {
+    isMeeting,
+    hasRegion,
+    hasRegionProfile,
+    hasMeetingWith,
+    hasMeetingGoal,
+    hasMeetingContext,
+    hasFocus,
+    urgency,
+  } = input;
+  // Вес каждого балла связан с реальным входом. Никакой стартовой «готовности 40%»:
+  // единственные базовые 10% — возможность собрать открытые источники.
+  let score = 10;
   const reasons: string[] = [];
 
-  if (hasFocus) score += 15;
-  else reasons.push("фокус не задан");
+  if (hasFocus) score += 20;
+  else reasons.push("не задан фокус материала");
 
-  if (hasRegion) {
-    if (hasRegionProfile) {
-      score += 30;
-    } else {
-      score += 8;
-      reasons.push("регион не заполнен");
-    }
-  } else {
-    reasons.push("регион не указан");
-  }
+  if (hasRegion) score += 10;
+  else reasons.push("не указан регион");
+
+  if (hasRegionProfile) score += 25;
+  else if (hasRegion) reasons.push("нет подтверждённой карточки региона");
 
   if (isMeeting) {
-    if (hasMeetingWith) score += 12;
-    else reasons.push("ЛПР по роли, без ФИО");
+    if (hasMeetingWith) score += 10;
+    else reasons.push("не определён ЛПР или его роль");
+    if (hasMeetingGoal) score += 15;
+    else reasons.push("не зафиксирован целевой исход встречи");
+    if (hasMeetingContext) score += 10;
+    else reasons.push("нет истории взаимодействия или исходной базы");
   } else {
-    score += 8;
+    score += 35;
   }
 
   if (urgency === "2_hours") reasons.push("срок сжатый — 2 часа");
   else if (urgency === "today") reasons.push("срок сжатый — сегодня");
 
-  // Подсказка о самом дешёвом приросте.
-  if (hasRegion && !hasRegionProfile) reasons.push("заполните регион → +30%");
-
-  const percent = Math.max(10, Math.min(95, score));
-  const tone = percent >= 70 ? "high" : percent >= 45 ? "mid" : "low";
+  const percent = Math.max(0, Math.min(100, score));
+  const tone = percent >= 80 ? "high" : percent >= 55 ? "mid" : "low";
   return { percent, reasons: reasons.slice(0, 4), tone };
 }
 
@@ -316,7 +325,6 @@ export function ChatFlow({
     regionId,
     isMeeting,
     submit,
-    selectRegion,
     applySuggestion,
   } = session;
 
@@ -371,7 +379,6 @@ export function ChatFlow({
       { shouldValidate: false },
     );
     return form.handleSubmit(submit, reportInvalidPlan)();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form, plan.enabledOrdered, plan.state.volume, submit]);
 
   async function handleBrief() {
@@ -533,6 +540,8 @@ export function ChatFlow({
                 hasRegion: Boolean(region),
                 hasRegionProfile: Boolean(selectedRegionProfile),
                 hasMeetingWith: Boolean(form.watch("meetingWith")?.trim()),
+                hasMeetingGoal: Boolean(form.watch("meetingGoal")?.trim()),
+                hasMeetingContext: Boolean(form.watch("meetingContext")?.trim()),
                 hasFocus: Boolean(form.watch("focusTopic")?.trim()),
                 urgency,
               })}
@@ -1090,10 +1099,10 @@ function MaterialPlanCard({
 
   const readyTone =
     readiness.tone === "high"
-      ? { bar: "bg-emerald-500", text: "text-emerald-700 dark:text-emerald-400", note: "данных достаточно" }
+      ? { bar: "bg-emerald-500", text: "text-emerald-700 dark:text-emerald-400", note: "основа подтверждена" }
       : readiness.tone === "mid"
-        ? { bar: "bg-amber-500", text: "text-amber-700 dark:text-amber-500", note: "часть будет гипотезой" }
-        : { bar: "bg-amber-500", text: "text-amber-700 dark:text-amber-500", note: "многое будет гипотезой" };
+        ? { bar: "bg-amber-500", text: "text-amber-700 dark:text-amber-500", note: "требуется проверка" }
+        : { bar: "bg-amber-500", text: "text-amber-700 dark:text-amber-500", note: "не хватает входных данных" };
 
   return (
     <div className="overflow-hidden rounded-2xl border">
@@ -1119,7 +1128,7 @@ function MaterialPlanCard({
         >
           <div className="flex items-center justify-between gap-2">
             <span className={cn("inline-flex items-center gap-1.5 text-xs font-semibold", readyTone.text)}>
-              <GaugeCircle className="size-4" /> Готовность данных
+              <GaugeCircle className="size-4" /> Готовность входных данных
             </span>
             <span className={cn("text-xs font-semibold tabular-nums", readyTone.text)}>
               {readiness.percent}% · {readyTone.note}
@@ -1386,7 +1395,6 @@ export function StepForm({
       { shouldValidate: false },
     );
     return form.handleSubmit(submit, reportInvalidPlan)();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form, plan.enabledOrdered, plan.state.volume, submit]);
 
   return (
@@ -1619,6 +1627,8 @@ export function StepForm({
                 hasRegion: Boolean(region),
                 hasRegionProfile: Boolean(selectedRegionProfile),
                 hasMeetingWith: Boolean(form.watch("meetingWith")?.trim()),
+                hasMeetingGoal: Boolean(form.watch("meetingGoal")?.trim()),
+                hasMeetingContext: Boolean(form.watch("meetingContext")?.trim()),
                 hasFocus: Boolean(form.watch("focusTopic")?.trim()),
                 urgency,
               })}

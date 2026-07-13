@@ -42,6 +42,7 @@ import type {
 import { SourcesFooter } from "./sources-footer";
 import { VisualsSection } from "./visuals-section";
 import { SberActionPanel } from "./sber-action-panel";
+import { assessAgenda } from "@/lib/quality/meeting-output-quality";
 
 // ── Тиерная модель честности: маленькие бейджи источника ─────────────────────
 const TIER_META: Record<
@@ -745,13 +746,16 @@ function ThesesSection({ theses }: { theses: MeetingThesis[] }) {
 
 // ── Сценарий встречи ──────────────────────────────────────────────────────────
 function AgendaSection({ agenda }: { agenda: MeetingOutput["agenda"] }) {
+  const quality = assessAgenda(agenda);
   return (
     <Card className="rounded-2xl">
       <CardContent className="p-4 sm:p-5">
         <SectionHeader
           icon={Clock}
           title="Сценарий встречи"
-          subtitle="Блоки по времени · все заполнены"
+          subtitle={quality.ready
+            ? "Блоки по времени · обязательные поля заполнены"
+            : `Заполнено ${quality.complete} из ${quality.total} · требуется пересборка`}
           count={agenda.length}
         />
         {/* На узких экранах — горизонтальный скролл; ничего не перекрывается */}

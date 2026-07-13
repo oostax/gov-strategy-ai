@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
-import { Loader2, RefreshCw, Sparkles } from "lucide-react";
+import { Loader2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/layout/app-shell";
 import { Button } from "@/components/ui/button";
@@ -214,7 +214,13 @@ export default function SessionPage() {
             </div>
 
             {output && !loading && (
-              <SessionFocusBar id="session-focus-bar" session={session} output={output} />
+              <SessionFocusBar
+                id="session-focus-bar"
+                session={session}
+                output={output}
+                loading={loading}
+                onRegenerate={() => generate()}
+              />
             )}
           </>
         )}
@@ -229,15 +235,6 @@ export default function SessionPage() {
           />
         ) : (
           <GenerationProgress active={loading} />
-        )}
-
-        {output && !loading && useBlocks && (
-          <div className="flex items-center justify-between gap-3 rounded-2xl border bg-card px-4 py-3">
-            <p className="text-sm text-muted-foreground">Материал собран блоками: поиск, факты, проверка источников</p>
-            <Button variant="outline" size="sm" onClick={() => generate()} disabled={loading}>
-              <RefreshCw className="size-3.5" /> Сформировать заново
-            </Button>
-          </div>
         )}
 
         {session && (

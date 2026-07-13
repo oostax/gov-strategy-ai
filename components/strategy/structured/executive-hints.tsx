@@ -1,10 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Lightbulb, X } from "lucide-react";
+import { Lightbulb } from "lucide-react";
 import type { TypedOutput } from "@/lib/schemas/structured-output";
-
-const STORAGE_KEY = "gsa-exec-hints-dismissed";
 
 const hintsByKind: Record<TypedOutput["kind"], string[]> = {
   strategy: [
@@ -32,45 +29,21 @@ const hintsByKind: Record<TypedOutput["kind"], string[]> = {
 };
 
 export function ExecutiveHints({ kind }: { kind: TypedOutput["kind"] }) {
-  const [dismissed, setDismissed] = useState(true);
-
-  useEffect(() => {
-    if (localStorage.getItem(STORAGE_KEY) !== "1") {
-      const t = window.setTimeout(() => setDismissed(false), 0);
-      return () => window.clearTimeout(t);
-    }
-  }, []);
-
-  if (dismissed) return null;
-
   const hints = hintsByKind[kind] ?? hintsByKind.strategy;
 
   return (
-    <div className="rounded-2xl border border-amber-300/40 bg-amber-50/40 p-4 dark:border-amber-900/40 dark:bg-amber-950/20">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <p className="flex items-center gap-2 text-sm font-semibold text-amber-800 dark:text-amber-200">
-          <Lightbulb className="size-4" /> Как читать материал
-        </p>
-        <button
-          type="button"
-          onClick={() => {
-            localStorage.setItem(STORAGE_KEY, "1");
-            setDismissed(true);
-          }}
-          className="rounded-md p-1 text-amber-700/70 transition hover:bg-amber-100 hover:text-amber-900 dark:text-amber-300/70 dark:hover:bg-amber-900/40"
-          aria-label="Скрыть подсказки"
-        >
-          <X className="size-4" />
-        </button>
-      </div>
-      <ul className="grid gap-1.5 sm:grid-cols-2">
+    <details className="rounded-xl border bg-muted/20 px-3 py-2">
+      <summary className="flex cursor-pointer list-none items-center gap-2 text-xs font-medium text-muted-foreground">
+        <Lightbulb className="size-3.5" /> Как читать материал
+      </summary>
+      <ul className="mt-2 grid gap-1.5 border-t pt-2 sm:grid-cols-2">
         {hints.map((hint, idx) => (
-          <li key={idx} className="flex items-start gap-2 text-xs leading-snug text-amber-900/90 dark:text-amber-100/90">
-            <span className="mt-1 size-1.5 shrink-0 rounded-full bg-amber-500" />
+          <li key={idx} className="flex items-start gap-2 text-xs leading-snug text-muted-foreground">
+            <span className="mt-1 size-1.5 shrink-0 rounded-full bg-foreground/30" />
             {hint}
           </li>
         ))}
       </ul>
-    </div>
+    </details>
   );
 }

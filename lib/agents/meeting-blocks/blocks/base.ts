@@ -157,7 +157,9 @@ export function normalizeFactSource(value: unknown): Source | undefined {
     title: title || url,
     url: url || undefined,
     excerpt: hasUsefulText(value.excerpt) ? String(value.excerpt).slice(0, 220) : "",
-    isVerified: Boolean(url),
+    // URL подтверждает существование страницы, но не соответствие тезиса источнику.
+    // Подтверждённым источник станет только в retrieval-слое после загрузки контента.
+    isVerified: false,
   };
 }
 
@@ -316,8 +318,11 @@ export function buildContextPreamble(deps: MeetingBlockDeps): string {
     deps.sberProjectsContext
       ? `\nРелевантные реальные проекты и активы Сбера:\n${deps.sberProjectsContext}`
       : "",
+    deps.trustedCrmContext
+      ? `\nПодтверждённый внутрисберовский контекст из карточки региона (разрешён tier="crm"):\n${deps.trustedCrmContext}`
+      : "",
     deps.memoryContext
-      ? `\nПамять по прошлым сессиям и ведомству (MemPalace) — это CRM-контекст (tier="crm"), НЕ интернет:\n${deps.memoryContext}`
+      ? `\nПредыдущий пользовательский ввод из MemPalace. Это историческая подсказка, НЕ подтверждённый факт и НЕ CRM: не присваивай tier="crm" без прямого подтверждения в карточке региона:\n${deps.memoryContext}`
       : "",
   ]
     .filter(Boolean)
@@ -412,7 +417,8 @@ export function normalizeSources(value: unknown): Source[] {
       title: item.title.trim(),
       url: typeof item.url === "string" && item.url.trim() ? item.url.trim() : undefined,
       excerpt: hasUsefulText(item.excerpt) ? String(item.excerpt).slice(0, 220) : "",
-      isVerified: item.isVerified === true,
+      // Модель не может сама присвоить источнику статус «проверен».
+      isVerified: false,
     });
   }
   return result;

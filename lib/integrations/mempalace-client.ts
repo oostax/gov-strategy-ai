@@ -10,6 +10,9 @@ export interface MemoryHit {
   title: string;
   excerpt: string;
   source: "mempalace";
+  /** Provenance from MemPalace. Used to keep generated outputs/feedback out of CRM facts. */
+  room?: string;
+  sourceFile?: string;
   score?: number;
 }
 
@@ -159,7 +162,7 @@ export function getMemoryClient(): MemoryClient {
           room?: string;
           source_file?: string;
           similarity?: number;
-          metadata?: { wing?: string; room?: string };
+          metadata?: { wing?: string; room?: string; source_file?: string };
           distance?: number;
           score?: number;
         }>;
@@ -169,13 +172,18 @@ export function getMemoryClient(): MemoryClient {
         console.warn(`[mempalace] search degraded: ${result.error}`);
         return [];
       }
-      return (result?.results ?? []).map((item, index) => ({
-        id: item.id || `mempalace_${index}`,
-        title: `${item.metadata?.room || item.room || "memory"} · ${item.metadata?.wing || item.wing || "gov_strategy_ai"}`,
-        excerpt: item.content || item.document || item.text || "",
-        source: "mempalace",
-        score: item.score ?? item.similarity ?? (typeof item.distance === "number" ? 1 - item.distance : undefined),
-      }));
+      return (result?.results ?? []).map((item, index) => {
+        const room = item.metadata?.room || item.room || "memory";
+        return {
+          id: item.id || `mempalace_${index}`,
+          title: `${room} · ${item.metadata?.wing || item.wing || "gov_strategy_ai"}`,
+          excerpt: item.content || item.document || item.text || "",
+          source: "mempalace" as const,
+          room,
+          sourceFile: item.metadata?.source_file || item.source_file,
+          score: item.score ?? item.similarity ?? (typeof item.distance === "number" ? 1 - item.distance : undefined),
+        };
+      });
     },
     async rememberSession(session) {
       assertMemPalaceConnected();

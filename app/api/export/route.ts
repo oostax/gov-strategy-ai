@@ -17,6 +17,7 @@ import { roleLabels, taskLabels } from "@/lib/schemas/session";
 import type { TypedOutput } from "@/lib/schemas/structured-output";
 import { structuredOutputPath } from "@/lib/agents/region-blocks/storage";
 import { getStorage } from "@/lib/storage/local-json-storage";
+import { assessTypedOutput } from "@/lib/quality/meeting-output-quality";
 
 export const runtime = "nodejs";
 
@@ -63,11 +64,25 @@ export async function GET(request: Request) {
         { status: 400 },
       );
     }
+    if (structured) {
+      const quality = assessTypedOutput(structured, {
+        taskType: details.session.taskType,
+      });
+      if (!quality.ready) {
+        return NextResponse.json(
+          {
+            error: "Материал не прошёл проверку качества. Пересоберите сессию перед экспортом.",
+            quality,
+          },
+          { status: 409 },
+        );
+      }
+    }
     const meta = [
       roleLabels[details.session.userRole],
       taskLabels[details.session.taskType],
-      details.session.region ? `Region: ${details.session.region}` : "",
-      details.session.audience ? `For: ${details.session.audience}` : "",
+      details.session.region ? `Регион: ${details.session.region}` : "",
+      details.session.audience ? `Аудитория: ${details.session.audience}` : "",
     ].filter(Boolean);
 
     const baseName = transliterate(
