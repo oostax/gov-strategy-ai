@@ -56,12 +56,18 @@ export async function POST(request: Request) {
     const input = createSessionSchema.parse(body);
     const { input: withRegion, createdRegionId } = await ensureRegionForSession(input);
     const session = await getStorage().createSession(withRegion);
-    try {
-      await getMemoryClient().rememberSession(session);
-    } catch (error) {
-      await getStorage().deleteSession(session.id);
-      throw error;
-    }
+    // Запись в MemPalace — BEST-EFFORT. Раньше её сбой удалял уже созданную
+    // сессию и возвращал 500 ("Failed to create session"): падение/зависание
+    // MemPalace полностью ломало создание сессий и приводило к "исчезновению"
+    // только что созданной сессии. Память не критична для создания — логируем
+    // и продолжаем, сессия сохраняется.
+    void getMemoryClient()
+      .rememberSession(session)
+      .catch((error) =>
+        console.warn(
+          `[sessions] rememberSession пропущена (MemPalace): ${error instanceof Error ? error.message : error}`,
+        ),
+      );
 
     if (createdRegionId) {
       void autofillRegionInBackground(createdRegionId, withRegion.region ?? "");
