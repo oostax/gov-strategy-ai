@@ -6,6 +6,7 @@ import {
   assessMeetingOutput,
   assessSberActions,
   assessTypedOutput,
+  cleanSourceText,
   deriveFiscalStance,
   hasSupportedFiscalStance,
   normalizeFactualProse,
@@ -14,6 +15,7 @@ import {
   stripUnsupportedHighRiskClauses,
   stripUnsupportedNamedParentheticals,
   stripUnsupportedNumericClauses,
+  stripUnsupportedRiskNumberTokens,
 } from "../../lib/quality/meeting-output-quality.ts";
 import {
   canUseAsCrmFact,
@@ -119,4 +121,75 @@ test("quality gate блокирует brief без доказательств и
   assert.equal(report.ready, false);
   assert.ok(report.issues.some((issue) => issue.code === "brief.evidence.short"));
   assert.ok(report.issues.some((issue) => issue.code === "brief.sources.short"));
+});
+
+// ── Дефект 1: HTML-entities и wiki-разметка в названиях источников ─────────
+
+test("cleanSourceText декодирует числовые hex HTML-сущности", () => {
+  assert.equal(cleanSourceText("&#x417;&#x430;"), "За");
+});
+
+test("cleanSourceText декодирует двойное кодирование (&amp;#x417; → буква)", () => {
+  // Первый проход снимает &amp; → &, оставляя &#x417;; второй проход
+  // декодирует его в саму букву. Один проход дал бы обрыв на "&#x417;".
+  assert.equal(cleanSourceText("&amp;#x417;"), "З");
+});
+
+test("cleanSourceText удаляет wiki-шаблон {{Wayback|...}} целиком", () => {
+  assert.equal(cleanSourceText("{{Wayback|url=x}}"), "");
+  assert.equal(cleanSourceText("Статья {{Wayback|url=x}} на сайте"), "Статья на сайте");
+});
+
+test("cleanSourceText превращает wiki-ссылку [[url|текст]] в видимый текст", () => {
+  assert.equal(cleanSourceText("[[rbc.ru|РБК]]"), "РБК");
+});
+
+test("cleanSourceText декодирует полное название закона из hex-сущностей", () => {
+  const raw =
+    "&#x417;&#x430;&#x43A;&#x43E;&#x43D; &#x420;&#x435;&#x441;&#x43F;&#x443;&#x431;&#x43B;&#x438;&#x43A;&#x438; " +
+    "&#x422;&#x430;&#x442;&#x430;&#x440;&#x441;&#x442;&#x430;&#x43D;";
+  assert.equal(cleanSourceText(raw), "Закон Республики Татарстан");
+});
+
+test("cleanSourceText не трогает нормальную краткую ссылку [домен]", () => {
+  assert.equal(cleanSourceText("[rbc.ru]"), "[rbc.ru]");
+});
+
+test("cleanSourceText удаляет тег <ref>...</ref>", () => {
+  assert.equal(cleanSourceText("<ref>служебная сноска</ref>Заголовок статьи"), "Заголовок статьи");
+});
+
+// ── Дефект 2: negotiation-guard/числовой скруббер вне proposal ──────────────
+
+test("самоназначенный куратор убирается из строки-гипотезы (глагол «будет»)", () => {
+  // До фикса sanitizeNegotiationCommitments ловил только «куратором назначаем»;
+  // модель также формулирует это как «куратором будет X» — обе формы переговорной
+  // позиции заказчика должны нейтрализоваться одинаково.
+  const hypothesis = "Куратором будет заместитель Премьер-министра, это ускорит согласование.";
+  const result = sanitizeNegotiationCommitments(hypothesis);
+  assert.equal(result.includes("Куратором будет"), false);
+  assert.equal(result.includes("заместитель Премьер-министра"), false);
+  assert.equal(result.includes("Куратора проекта определяет заказчик"), true);
+});
+
+test("неподтверждённый процент убирается из поля sberActions без опустошения поля", () => {
+  const evidence = "Официальный источник подтверждает запуск программы цифровизации региона.";
+  const field = "Обеспечить охват минимум 15% населения региона в первые две недели.";
+  // Клаузное удаление (высокий уровень строгости): вся клауза с процентом не
+  // подтверждена evidence и должна быть удалена целиком, как для mainThesis/proposal.
+  const afterClauses = stripUnsupportedHighRiskClauses(field, evidence);
+  assert.equal(afterClauses.includes("15%"), false);
+  assert.equal(afterClauses.includes("минимум"), false);
+  // Точечный fallback (когда клаузное удаление опустошает всё поле) вырезает
+  // только число+единицу, оставляя обязательное поле непустым.
+  const afterTokens = stripUnsupportedRiskNumberTokens(field, evidence);
+  assert.equal(afterTokens.includes("15%"), false);
+  assert.ok(afterTokens.length > 0);
+});
+
+test("подтверждённый evidence масштаб («жителей») не вырезается", () => {
+  const evidence = "Программа охватит 200 000 жителей региона в первый год работы.";
+  const field = "Охват составит ≈200 000 жителей региона.";
+  const result = stripUnsupportedHighRiskClauses(field, evidence);
+  assert.equal(result.includes("200 000"), true);
 });

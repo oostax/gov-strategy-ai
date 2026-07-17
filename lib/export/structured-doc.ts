@@ -15,6 +15,7 @@ import type {
   StructuredOutput,
   TypedOutput,
 } from "@/lib/schemas/structured-output";
+import { cleanSourceText } from "@/lib/quality/meeting-output-quality";
 
 /**
  * Обобщённый рендер структурированного вывода в документ.
@@ -84,9 +85,15 @@ function withTier(text: string, tier?: SourceTier): string {
   return label ? `${body} [${label}]` : body;
 }
 
+/**
+ * Название источника из уже сохранённых сессий может содержать HTML-сущности
+ * или wiki-разметку (данные пришли из веб-скрейпинга до внедрения очистки в
+ * assembler.ts). Прогоняем через cleanSourceText здесь же, на рендере
+ * экспорта, чтобы починить старые stored output без миграции данных.
+ */
 function sourceRef(source?: Source): string {
   if (!source) return "";
-  const title = clean(source.title);
+  const title = clean(cleanSourceText(source.title));
   const url = clean(source.url);
   if (title && url) return `${title} — ${url}`;
   return title || url || "";
@@ -127,7 +134,7 @@ function sourcesSection(sources: Source[] | undefined, hypotheses?: string[]): D
     .map((s) => {
       const ref = sourceRef(s);
       const mark = s.isVerified ? "Факт" : "Требует проверки";
-      const excerpt = clean(s.excerpt);
+      const excerpt = clean(cleanSourceText(s.excerpt));
       const base = ref || excerpt;
       if (!base) return "";
       const tail = excerpt && ref ? ` — ${excerpt}` : "";

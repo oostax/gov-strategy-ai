@@ -276,11 +276,74 @@ export function sanitizeNegotiationCommitments(text: string): string {
   return text
     .replace(/в\s+(?:одном\s+)?муниципалитете\s*[—–-]\s*[А-ЯЁ][А-Яа-яЁё-]+/gu, "в согласованной пилотной зоне")
     .replace(/в\s+муниципалитете\s+[А-ЯЁ][А-Яа-яЁё-]+/gu, "в согласованной пилотной зоне")
-    .replace(/куратором\s+назначаем[^.]+\.?/giu, "Куратора проекта определяет заказчик. ")
+    // Любая формулировка самоназначения куратора моделью («назначаем»,
+    // «будет», «станет», «выступит», «является») — это переговорная позиция
+    // заказчика, а не факт; нейтрализуем независимо от глагола.
+    .replace(
+      /куратором\s+(?:назначаем|будет|станет|выступит|выступает|является)\s+[^.]+\.?/giu,
+      "Куратора проекта определяет заказчик. ",
+    )
     .replace(/без\s+дополнительных\s+капитальных\s+вложений,?/giu, "")
     .replace(/\s+([,.])/g, "$1")
     .replace(/\s{2,}/g, " ")
     .trim();
+}
+
+const NAMED_HTML_ENTITIES: Record<string, string> = {
+  "&amp;": "&",
+  "&quot;": '"',
+  "&apos;": "'",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&nbsp;": " ",
+};
+
+/**
+ * Разово декодирует HTML-сущности (числовые hex/dec и именованные) в тексте.
+ * Порядок замены в одном проходе не важен: regex сканирует непересекающиеся
+ * совпадения слева-направо, поэтому `&amp;#x417;` в первом проходе даёт
+ * `&#x417;` (совпал только `&amp;`), а во втором проходе декодируется в букву.
+ */
+function decodeHtmlEntitiesOnce(text: string): string {
+  return text.replace(
+    /&#x([0-9a-fA-F]+);|&#(\d+);|&(?:amp|quot|apos|lt|gt|nbsp);/g,
+    (match, hex?: string, dec?: string) => {
+      if (hex) {
+        const code = Number.parseInt(hex, 16);
+        return Number.isFinite(code) ? String.fromCodePoint(code) : match;
+      }
+      if (dec) {
+        const code = Number.parseInt(dec, 10);
+        return Number.isFinite(code) ? String.fromCodePoint(code) : match;
+      }
+      return NAMED_HTML_ENTITIES[match] ?? match;
+    },
+  );
+}
+
+/**
+ * Очищает название/выдержку источника от артефактов веб-скрейпинга:
+ * HTML-сущности (в т.ч. двойное кодирование `&amp;#x417;`), wiki-шаблоны
+ * `{{...}}`, wiki-ссылки `[[...]]`/`[[url|текст]]` и теги `<ref>...</ref>`.
+ * Нормальные короткие ссылки вида `[rbc.ru]` (одиночные скобки) не трогает.
+ */
+export function cleanSourceText(text: string): string {
+  if (typeof text !== "string" || !text) return "";
+  // Два прохода декодирования HTML-сущностей закрывают двойное кодирование.
+  let result = decodeHtmlEntitiesOnce(text);
+  result = decodeHtmlEntitiesOnce(result);
+
+  result = result
+    // Wiki-шаблоны вида {{Wayback|url=...}} — удаляем целиком.
+    .replace(/\{\{[^{}]*\}\}/gu, "")
+    // Теги <ref ...>...</ref> и самозакрывающиеся <ref .../>.
+    .replace(/<ref\b[^>]*>[\s\S]*?<\/ref\s*>/giu, "")
+    .replace(/<ref\b[^>]*\/>/giu, "")
+    // Wiki-ссылки [[ссылка|видимый текст]] → видимый текст; [[текст]] → текст.
+    .replace(/\[\[([^[\]|]*)\|([^[\]]+)\]\]/gu, "$2")
+    .replace(/\[\[([^[\]]+)\]\]/gu, "$1");
+
+  return result.replace(/\s{2,}/g, " ").trim();
 }
 
 export function stripDecorativeSymbols(text: string): string {
@@ -291,6 +354,12 @@ export function stripDecorativeSymbols(text: string): string {
     .trim();
 }
 
+// Единицы, после которых число считается высокорисковым коммерческим/
+// демографическим утверждением: деньги, доли, а также масштаб (жители,
+// обращения, муниципалитеты) — то, что модель любит домысливать без evidence.
+const HIGH_RISK_NUMBER_UNIT =
+  /(?:%|₽|руб(?:лей|ля|ль)?|млрд|млн|трлн|тыс(?:яч)?|жител(?:ей|я|ь|и)?|человек|обращени(?:й|е|я|ям)?|муниципалитет(?:ов|а|е)?)/;
+
 export function stripUnsupportedHighRiskClauses(text: string, evidence: string): string {
   const evidenceChunks = evidence.split(/\n+/).map((chunk) => chunk.trim()).filter(Boolean);
   const clauses = text
@@ -298,7 +367,8 @@ export function stripUnsupportedHighRiskClauses(text: string, evidence: string):
     .map((part) => part.trim())
     .filter(Boolean);
   const kept = clauses.filter((clause) => {
-    const matches = clause.match(/\d[\d\s.,]*\s*(?:%|₽|руб(?:лей|ля|ль)?|млрд|млн|трлн)/giu) ?? [];
+    const matches =
+      clause.match(new RegExp(`[≈~]?\\d[\\d\\s.,]*\\s*${HIGH_RISK_NUMBER_UNIT.source}`, "giu")) ?? [];
     if (matches.length === 0) return true;
     const numberTokens = matches.map(normalizeNumericText);
     const claimWords = significantWords(clause);
@@ -311,6 +381,23 @@ export function stripUnsupportedHighRiskClauses(text: string, evidence: string):
     });
   });
   return kept.join(" ").trim();
+}
+
+/**
+ * Точечный вариант stripUnsupportedHighRiskClauses для полей, которые не
+ * должны стать пустыми целиком (обязательные поля sberActions): вырезает
+ * только сам неподтверждённый числовой токен (число + единица риска) внутри
+ * предложения, не удаляя всю клаузу и окружающий текст. Используется как
+ * консервативный fallback, когда клаузное удаление опустошило бы поле.
+ */
+export function stripUnsupportedRiskNumberTokens(text: string, evidence: string): string {
+  const evidenceLower = normalizeNumericText(evidence);
+  const pattern = new RegExp(`[≈~]?\\d[\\d\\s.,]*\\s*${HIGH_RISK_NUMBER_UNIT.source}`, "giu");
+  const result = text.replace(pattern, (token) => (evidenceLower.includes(normalizeNumericText(token)) ? token : ""));
+  return result
+    .replace(/\s+([,.;:])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 }
 
 export function deriveFiscalStance(
@@ -360,6 +447,7 @@ function numericTokens(text: string): string[] {
 function normalizeNumericText(value: string): string {
   return value
     .toLowerCase()
+    .replace(/[≈~]/g, "")
     .replace(/[\u00a0\u202f\s]+/g, "")
     .replace(/,/g, ".")
     .replace(/руб(?:лей|ля|ль)?/g, "₽");

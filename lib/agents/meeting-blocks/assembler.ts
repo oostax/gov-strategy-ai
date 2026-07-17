@@ -13,11 +13,13 @@ import type {
 import { MEETING_BLOCK_ORDER, type MeetingBlockKind } from "./types";
 import {
   assessMeetingOutput,
+  cleanSourceText,
   isCompleteAgendaItem,
   isCompleteSberAction,
   sanitizeNegotiationCommitments,
   stripDecorativeSymbols,
   stripUnsupportedHighRiskClauses,
+  stripUnsupportedRiskNumberTokens,
 } from "@/lib/quality/meeting-output-quality";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -33,10 +35,15 @@ function appendSources(target: Source[], value: unknown) {
   const seen = new Set(target.map(normalizeKey));
   for (const item of value) {
     if (!isRecord(item) || typeof item.title !== "string") continue;
+    // Названия/выдержки источников из веб-скрейпинга (publication.pravo.gov.ru
+    // и т.п.) могут прийти в HTML-entity-кодировке или с wiki-разметкой —
+    // чистим один раз здесь, в единой точке сборки для UI и всех экспортов.
+    const cleanedTitle = cleanSourceText(item.title);
+    if (!cleanedTitle) continue;
     const source: Source = {
-      title: item.title,
+      title: cleanedTitle,
       url: typeof item.url === "string" ? item.url : undefined,
-      excerpt: typeof item.excerpt === "string" ? item.excerpt : "",
+      excerpt: typeof item.excerpt === "string" ? cleanSourceText(item.excerpt) : "",
       isVerified: item.isVerified === true,
     };
     const key = normalizeKey(source);
@@ -130,11 +137,81 @@ export function sanitizeMeetingShape(data: MeetingOutput): MeetingOutput {
   return data;
 }
 
+/**
+ * Прогоняет прозаическое поле через negotiation-guard (убирает самоназначенные
+ * куратора/пилотную зону) и числовой скруббер (убирает неподтверждённые
+ * суммы/%%/масштабы). Обязательные поля sberActions не должны стать пустыми
+ * целиком, поэтому чистка идёт по убывающей строгости:
+ *  1. Клаузное удаление (stripUnsupportedHighRiskClauses) — предпочтительно,
+ *     убирает весь неподтверждённый оборот целиком.
+ *  2. Если это опустошило поле — точечное вырезание только числового токена
+ *     (stripUnsupportedRiskNumberTokens), окружающий текст остаётся.
+ *  3. Если и это дало пустоту — результат только negotiation-guard.
+ *  4. Крайний фолбэк — исходный текст (никогда не отдаём пустую строку).
+ */
+function sanitizeProseField(text: string, evidence: string): string {
+  if (!nonEmpty(text)) return text;
+  const afterNegotiation = sanitizeNegotiationCommitments(stripDecorativeSymbols(text));
+  const afterClauses = stripUnsupportedHighRiskClauses(afterNegotiation, evidence);
+  if (nonEmpty(afterClauses)) return afterClauses;
+  const afterTokens = stripUnsupportedRiskNumberTokens(afterNegotiation, evidence);
+  if (nonEmpty(afterTokens)) return afterTokens;
+  if (nonEmpty(afterNegotiation)) return afterNegotiation;
+  return text;
+}
+
+/**
+ * Дефект 2: negotiation-guard и числовой скруббер раньше применялись только к
+ * proposal. Самоназначенный куратор/пилотная зона просачивались в hypotheses,
+ * а неподтверждённые числа — в sberActions. Чистим прозаические поля за
+ * пределами proposal тем же evidence (подтверждённые источники).
+ */
+function sanitizeNegotiationAndNumericClaims(data: MeetingOutput, evidence: string): MeetingOutput {
+  if (Array.isArray(data.hypotheses)) {
+    data.hypotheses = data.hypotheses
+      .map((hypothesis) => {
+        const guarded = sanitizeNegotiationCommitments(stripDecorativeSymbols(hypothesis));
+        return stripUnsupportedHighRiskClauses(guarded, evidence);
+      })
+      .filter(nonEmpty);
+  }
+
+  if (Array.isArray(data.objections)) {
+    // Только negotiation-guard (без числового скраба) — тиерная модель не
+    // требует его для возражений; safeNegotiation защищает required-поля от
+    // случайного опустошения при точечных regex-заменах.
+    const safeNegotiation = (text: string) => {
+      if (!nonEmpty(text)) return text;
+      const guarded = sanitizeNegotiationCommitments(stripDecorativeSymbols(text));
+      return nonEmpty(guarded) ? guarded : text;
+    };
+    data.objections = data.objections.map((objection) => ({
+      ...objection,
+      objection: safeNegotiation(objection.objection),
+      response: safeNegotiation(objection.response),
+    }));
+  }
+
+  if (Array.isArray(data.sberActions)) {
+    data.sberActions = data.sberActions.map((action) => ({
+      ...action,
+      asset: sanitizeProseField(action.asset, evidence),
+      firstTwoWeeks: sanitizeProseField(action.firstTwoWeeks, evidence),
+      dataNeeded: sanitizeProseField(action.dataNeeded, evidence),
+      commercialNextStep: sanitizeProseField(action.commercialNextStep, evidence),
+    }));
+  }
+
+  return data;
+}
+
 function sanitizeExecutiveClaims(data: MeetingOutput): MeetingOutput {
   const evidence = (data.sources ?? [])
     .filter((source) => source.isVerified === true)
     .map((source) => `${source.title ?? ""} ${source.excerpt ?? ""}`)
     .join("\n");
+
+  sanitizeNegotiationAndNumericClaims(data, evidence);
 
   if (data.mainThesis) {
     const safeThesis = stripUnsupportedHighRiskClauses(stripDecorativeSymbols(data.mainThesis), evidence);
