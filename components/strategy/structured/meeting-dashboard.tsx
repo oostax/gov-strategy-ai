@@ -1,6 +1,13 @@
 "use client";
 
-import { createContext, useContext, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   ArrowRight,
   BadgeCheck,
@@ -20,8 +27,11 @@ import {
   Minimize2,
   Pause,
   RefreshCw,
+  Send,
   ShieldCheck,
+  Sparkles,
   Target,
+  Undo2,
   User,
   Users,
   XCircle,
@@ -30,6 +40,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import type {
   AskLadder,
   LprDossier,
@@ -52,7 +63,7 @@ import { VisualsSection } from "./visuals-section";
 import { SberActionPanel } from "./sber-action-panel";
 import { assessAgenda } from "@/lib/quality/meeting-output-quality";
 
-// ── Правки готового блока кнопками (волна 8.5) ────────────────────────────────
+// ── Правки готового блока кнопками (волна 8.5 + остаток) ──────────────────────
 
 /** Виды блоков встречи, для которых доступны кнопки-правки (== kind бэкенда). */
 type EditableBlockKind =
@@ -65,16 +76,26 @@ type EditableBlockKind =
   | "agenda"
   | "after";
 
+/** Режимы кнопочных правок (остаётся отдельно от «undo» — тот не идёт в LLM). */
 type EditMode = "rebuild" | "expand" | "shorten" | "recheck";
 
+/** Сколько миллисекунд после апдейта блока держим маркер «Обновлено». */
+const UPDATE_MARKER_TTL_MS = 4000;
+
 /**
- * Контекст правок: sessionId + колбэк обновления материала. Прокидывается из
+ * Контекст правок: sessionId + колбэк обновления материала + метка последнего
+ * обновлённого блока (для точечного UI-фидбека — маркер «Обновлено» и мягкий
+ * скролл к секции, без перерисовки/скачка всего дашборда). Прокидывается из
  * страницы сессии. Если контекста нет (напр. предпросмотр/экспорт) — кнопки не
  * рендерятся, дашборд остаётся чисто презентационным.
  */
 const MeetingEditContext = createContext<{
   sessionId?: string;
   onUpdated?: (output: TypedOutput) => void;
+  /** Какой блок обновился последним и когда (Date.now()) — для маркера/скролла. */
+  lastUpdate?: { kind: EditableBlockKind; at: number } | null;
+  /** Сообщает дашборду, что этот блок только что обновился (для lastUpdate). */
+  notifyUpdated?: (kind: EditableBlockKind) => void;
 } | null>(null);
 
 const EDIT_ACTIONS: {
@@ -92,42 +113,56 @@ const EDIT_ACTIONS: {
 ];
 
 /**
- * Компактный ряд кнопок-действий над секцией встречи. Минимум «Пересобрать»
- * работает end-to-end: POST /api/generate/block с kind этой секции, состояние
- * загрузки, по готовности обновляет материал через onUpdated. Режимы expand/
- * shorten/recheck передаются тем же вызовом (mode) — в промпт блока добавляется
- * директива объёма/перепроверки.
+ * Компактный ряд кнопок-действий над секцией встречи. «Пересобрать/Расширить/
+ * Сократить/Перепроверить» работают end-to-end: POST /api/generate/block с
+ * kind этой секции, состояние загрузки, по готовности обновляет материал через
+ * onUpdated. «Отменить» восстанавливает предыдущую версию блока БЕЗ вызова
+ * LLM (mode="undo") — активна только когда есть версия для отмены
+ * (versionsCount из ответа последней операции над этим блоком).
  */
 function BlockActionsRow({ blockKind }: { blockKind: EditableBlockKind }) {
   const ctx = useContext(MeetingEditContext);
-  const [pending, setPending] = useState<EditMode | null>(null);
+  // "instruction" — отдельная метка загрузки для чат-правки: та тоже шлёт
+  // mode="rebuild" на бэкенд, но визуально должна крутить именно кнопку
+  // отправки инструкции, а не общую кнопку «Пересобрать» из EDIT_ACTIONS.
+  const [pending, setPending] = useState<EditMode | "undo" | "instruction" | null>(null);
+  const [versionsCount, setVersionsCount] = useState(0);
+  const [instruction, setInstruction] = useState("");
 
   // Без sessionId (нет контекста правок) кнопки не показываем.
   if (!ctx?.sessionId) return null;
-  const { sessionId, onUpdated } = ctx;
+  const { sessionId, onUpdated, notifyUpdated } = ctx;
+
+  async function callBlockEndpoint(body: Record<string, unknown>) {
+    const res = await fetch("/api/generate/block", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, blockKind, ...body }),
+    });
+    const data = (await res.json().catch(() => ({}))) as {
+      status?: string;
+      output?: TypedOutput;
+      versionsCount?: number;
+      error?: { message?: string } | string;
+    };
+    if (!res.ok || data.status !== "ready" || !data.output) {
+      const msg =
+        typeof data.error === "string"
+          ? data.error
+          : data.error?.message || "Не удалось обновить блок";
+      throw new Error(msg);
+    }
+    return data;
+  }
 
   async function runEdit(mode: EditMode) {
     if (pending) return;
     setPending(mode);
     try {
-      const res = await fetch("/api/generate/block", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, blockKind, mode }),
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        status?: string;
-        output?: TypedOutput;
-        error?: { message?: string } | string;
-      };
-      if (!res.ok || data.status !== "ready" || !data.output) {
-        const msg =
-          typeof data.error === "string"
-            ? data.error
-            : data.error?.message || "Не удалось обновить блок";
-        throw new Error(msg);
-      }
-      onUpdated?.(data.output);
+      const data = await callBlockEndpoint({ mode });
+      onUpdated?.(data.output as TypedOutput);
+      notifyUpdated?.(blockKind);
+      if (typeof data.versionsCount === "number") setVersionsCount(data.versionsCount);
       const verb =
         mode === "expand"
           ? "расширён"
@@ -144,27 +179,106 @@ function BlockActionsRow({ blockKind }: { blockKind: EditableBlockKind }) {
     }
   }
 
+  async function runUndo() {
+    if (pending) return;
+    setPending("undo");
+    try {
+      const data = await callBlockEndpoint({ mode: "undo" });
+      onUpdated?.(data.output as TypedOutput);
+      notifyUpdated?.(blockKind);
+      if (typeof data.versionsCount === "number") setVersionsCount(data.versionsCount);
+      toast.success("Возвращена предыдущая версия блока");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Нет предыдущей версии для отмены");
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function runInstruction() {
+    const trimmed = instruction.trim();
+    if (!trimmed || pending) return;
+    setPending("instruction");
+    try {
+      const data = await callBlockEndpoint({ mode: "rebuild", instruction: trimmed });
+      onUpdated?.(data.output as TypedOutput);
+      notifyUpdated?.(blockKind);
+      if (typeof data.versionsCount === "number") setVersionsCount(data.versionsCount);
+      setInstruction("");
+      toast.success("Правка применена");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Не удалось применить правку");
+    } finally {
+      setPending(null);
+    }
+  }
+
+  const disabled = pending !== null;
+
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {EDIT_ACTIONS.map(({ mode, label, Icon, variant, ready }) => {
-        const isPending = pending === mode;
-        const disabled = pending !== null;
-        return (
-          <Button
-            key={mode}
-            type="button"
-            size="sm"
-            variant={variant}
-            disabled={disabled}
-            aria-busy={isPending}
-            title={ready ? label : `${label} (скоро)`}
-            onClick={() => runEdit(mode)}
-          >
-            {isPending ? <Loader2 className="animate-spin" /> : <Icon />}
-            {label}
-          </Button>
-        );
-      })}
+    <div className="flex flex-col items-end gap-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {EDIT_ACTIONS.map(({ mode, label, Icon, variant, ready }) => {
+          const isPending = pending === mode;
+          return (
+            <Button
+              key={mode}
+              type="button"
+              size="sm"
+              variant={variant}
+              disabled={disabled}
+              aria-busy={isPending}
+              title={ready ? label : `${label} (скоро)`}
+              onClick={() => runEdit(mode)}
+            >
+              {isPending ? <Loader2 className="animate-spin" /> : <Icon />}
+              {label}
+            </Button>
+          );
+        })}
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={disabled || versionsCount === 0}
+          aria-busy={pending === "undo"}
+          title={versionsCount > 0 ? "Отменить последнюю правку блока" : "Нет предыдущей версии"}
+          onClick={runUndo}
+        >
+          {pending === "undo" ? <Loader2 className="animate-spin" /> : <Undo2 />}
+          Отменить
+        </Button>
+      </div>
+      <div
+        className="flex w-full items-center gap-1.5"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <Input
+          value={instruction}
+          onChange={(event) => setInstruction(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              runInstruction();
+            }
+          }}
+          placeholder="Уточните правку блока"
+          disabled={disabled}
+          maxLength={500}
+          className="h-8 min-w-[220px] text-xs"
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={disabled || !instruction.trim()}
+          aria-busy={pending === "instruction"}
+          title="Применить инструкцию к блоку"
+          onClick={runInstruction}
+        >
+          {pending === "instruction" ? <Loader2 className="animate-spin" /> : <Send />}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -172,6 +286,10 @@ function BlockActionsRow({ blockKind }: { blockKind: EditableBlockKind }) {
 /**
  * Обёртка секции с рядом кнопок-правок в правом верхнем углу. Кнопки позициони-
  * руются абсолютно, чтобы не менять внутреннюю вёрстку карточек секций.
+ * Точечный UI-фидбек (остаток волны 8.5): если этот блок обновился последним —
+ * показывает ненавязчивый маркер «Обновлено» и мягко скроллит к секции, БЕЗ
+ * перерисовки/скачка остального дашборда (сама секция не перемонтируется —
+ * меняются только пропсы children, приходящие от родителя).
  */
 function EditableSection({
   blockKind,
@@ -181,9 +299,37 @@ function EditableSection({
   children: ReactNode;
 }) {
   const ctx = useContext(MeetingEditContext);
+  const sectionRef = useRef<HTMLDivElement>(null);
+  const lastUpdate = ctx?.lastUpdate;
+  const isTarget = Boolean(lastUpdate && lastUpdate.kind === blockKind);
+  // Явный state маркера: устанавливается ТОЛЬКО из эффекта (асинхронно, через
+  // таймеры) — не при рендере (Date.now() при рендере запрещён правилами
+  // чистоты компонентов) и не синхронно в теле эффекта.
+  const [showMarker, setShowMarker] = useState(false);
+
+  useEffect(() => {
+    if (!isTarget) return;
+    // Мягкий скролл к обновлённой секции — руководитель не теряет контекст,
+    // даже если объём блока (expand/shorten) сдвинул содержимое ниже/выше.
+    sectionRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    // setState откладываем на следующий тик — сам эффект не вызывает setState
+    // синхронно в своём теле.
+    const showTimer = setTimeout(() => setShowMarker(true), 0);
+    const hideTimer = setTimeout(() => setShowMarker(false), UPDATE_MARKER_TTL_MS);
+    return () => {
+      clearTimeout(showTimer);
+      clearTimeout(hideTimer);
+    };
+  }, [lastUpdate?.kind, lastUpdate?.at, isTarget]);
+
   if (!ctx?.sessionId) return <>{children}</>;
   return (
-    <div className="relative">
+    <div ref={sectionRef} className="relative">
+      {showMarker && (
+        <div className="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">
+          <Sparkles className="size-3" /> Обновлено
+        </div>
+      )}
       <div className="pointer-events-none absolute right-3 top-3 z-10 flex justify-end">
         <div className="pointer-events-auto rounded-xl border bg-card/90 p-1 shadow-sm backdrop-blur">
           <BlockActionsRow blockKind={blockKind} />
@@ -332,6 +478,14 @@ export function MeetingDashboard({
   /** Колбэк с обновлённым материалом после правки одного блока. */
   onUpdated?: (output: TypedOutput) => void;
 }) {
+  // Точечный UI-фидбек после правки блока (остаток волны 8.5): какая секция
+  // обновилась последней. Не влияет на данные материала — только на маркер
+  // «Обновлено» и мягкий скролл внутри EditableSection этого блока.
+  const [lastUpdate, setLastUpdate] = useState<{ kind: EditableBlockKind; at: number } | null>(
+    null,
+  );
+  const notifyUpdated = (kind: EditableBlockKind) => setLastUpdate({ kind, at: Date.now() });
+
   const portrait = data.ministryPortrait;
   const hasPortrait =
     portrait &&
@@ -435,7 +589,7 @@ export function MeetingDashboard({
   }
 
   return (
-    <MeetingEditContext.Provider value={{ sessionId, onUpdated }}>
+    <MeetingEditContext.Provider value={{ sessionId, onUpdated, lastUpdate, notifyUpdated }}>
       <div className="space-y-5">
         {/* Hero: цель + лестница запросов + тезис/предложение/артефакт */}
         <div id="decision" className="scroll-mt-56">

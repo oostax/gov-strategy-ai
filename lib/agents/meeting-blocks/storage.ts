@@ -55,6 +55,13 @@ function blockPath(sessionId: string, runId: string, kind: MeetingBlockKind) {
   return path.join(runRoot(sessionId, runId), "blocks", `${kind}.json`);
 }
 
+function blockVersionsPath(sessionId: string, runId: string, kind: MeetingBlockKind) {
+  return path.join(runRoot(sessionId, runId), `${kind}.versions.json`);
+}
+
+/** Максимум снапшотов в стеке версий одного блока (undo, волна 8.5-остаток). */
+const MAX_BLOCK_VERSIONS = 5;
+
 export function createRunId() {
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
   const random = Math.random().toString(36).slice(2, 8);
@@ -193,6 +200,98 @@ export async function readBlockData(
   } catch {
     return null;
   }
+}
+
+// ── Стек версий блока (undo, волна 8.5-остаток) ────────────────────────────
+//
+// Перед каждой (пере)сборкой блока предыдущее содержимое блока снапшотится в
+// стек версий этого прогона. «Отменить» достаёт верхний снапшот и кладёт его
+// обратно как текущие данные блока — без вызова LLM. Стек ограничен по глубине
+// (MAX_BLOCK_VERSIONS), самые старые снапшоты отбрасываются. Формат снапшота
+// совпадает с тем, что уже хранит writeBlockData ({ kind, state, data,
+// updatedAt }), поэтому popBlockVersion можно напрямую передать в writeBlockData.
+
+export interface MeetingBlockVersionSnapshot {
+  kind: MeetingBlockKind;
+  state: MeetingBlockState;
+  data?: unknown;
+  updatedAt: string;
+}
+
+async function readBlockVersionsRaw(
+  sessionId: string,
+  runId: string,
+  kind: MeetingBlockKind,
+): Promise<MeetingBlockVersionSnapshot[]> {
+  try {
+    const raw = await fs.readFile(blockVersionsPath(sessionId, runId, kind), "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as MeetingBlockVersionSnapshot[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Текущий стек версий блока (от старейшей к самой недавней). Только чтение. */
+export async function readBlockVersions(
+  sessionId: string,
+  runId: string,
+  kind: MeetingBlockKind,
+): Promise<MeetingBlockVersionSnapshot[]> {
+  return readBlockVersionsRaw(sessionId, runId, kind);
+}
+
+/**
+ * Снапшотит текущие данные блока в стек версий ПЕРЕД тем, как блок будет
+ * перезаписан новой (пере)сборкой. snapshot — то, что сейчас лежит в
+ * blockPath (readBlockData), т.е. предыдущая ready-версия. Если snapshot
+ * отсутствует (блок ранее не существовал) — ничего не пишем, отмена невозможна
+ * для того, чего не было. Стек ограничен MAX_BLOCK_VERSIONS: самый старый
+ * снапшот отбрасывается при переполнении. Read-modify-write через
+ * withStateLock — та же сериализация, что и для run/blockState в этом файле.
+ */
+export async function writeBlockVersion(
+  sessionId: string,
+  runId: string,
+  kind: MeetingBlockKind,
+  snapshot: MeetingBlockVersionSnapshot | null,
+): Promise<void> {
+  if (!snapshot) return;
+  await withStateLock(async () => {
+    const stack = await readBlockVersionsRaw(sessionId, runId, kind);
+    stack.push(snapshot);
+    while (stack.length > MAX_BLOCK_VERSIONS) stack.shift();
+    await atomicWrite(blockVersionsPath(sessionId, runId, kind), stack);
+  });
+}
+
+/**
+ * Достаёт из стека самую недавнюю версию блока и УКОРАЧИВАЕТ стек (pop).
+ * Возвращает null, если версий нет — вызывающая сторона должна вернуть
+ * пользователю понятную ошибку («нечего отменять»), а не тихо промолчать.
+ */
+export async function popBlockVersion(
+  sessionId: string,
+  runId: string,
+  kind: MeetingBlockKind,
+): Promise<MeetingBlockVersionSnapshot | null> {
+  return withStateLock(async () => {
+    const stack = await readBlockVersionsRaw(sessionId, runId, kind);
+    const snapshot = stack.pop();
+    if (!snapshot) return null;
+    await atomicWrite(blockVersionsPath(sessionId, runId, kind), stack);
+    return snapshot;
+  });
+}
+
+/** Сколько версий доступно для отмены (для canUndo/versionsCount во фронте). */
+export async function countBlockVersions(
+  sessionId: string,
+  runId: string,
+  kind: MeetingBlockKind,
+): Promise<number> {
+  const stack = await readBlockVersionsRaw(sessionId, runId, kind);
+  return stack.length;
 }
 
 export async function writeStructuredOutput(sessionId: string, output: unknown) {

@@ -41,12 +41,18 @@ export type MeetingBlockKind =
  * - expand   — тот же блок, но глубже/подробнее (больше пунктов, детализация).
  * - shorten  — тот же блок, но короче/суше (оставить суть, убрать воду).
  * - recheck  — перепроверить факты/тиеры, ужесточить дисциплину источников.
+ * - undo     — вернуть предыдущую версию блока из стека версий прогона,
+ *              БЕЗ вызова LLM (см. restoreMeetingBlock в orchestrator.ts).
  */
-export type MeetingBlockMode = "rebuild" | "expand" | "shorten" | "recheck";
+export type MeetingBlockMode = "rebuild" | "expand" | "shorten" | "recheck" | "undo";
 
-/** Директивы режимов правки — добавляются в промпт блока (не меняют схему JSON). */
+/**
+ * Директивы режимов правки — добавляются в промпт блока (не меняют схему JSON).
+ * "undo" сюда не входит: этот режим не идёт в LLM, а восстанавливает снапшот
+ * блока из стека версий.
+ */
 export const MEETING_BLOCK_MODE_DIRECTIVES: Record<
-  Exclude<MeetingBlockMode, "rebuild">,
+  Exclude<MeetingBlockMode, "rebuild" | "undo">,
   string
 > = {
   expand:
@@ -221,9 +227,11 @@ export interface MeetingBlockDeps {
   /** Готовые блоки предыдущих волн — для контекста (ministry → theses и т.д.). */
   priorBlocks?: Array<{ kind: MeetingBlockKind; data: unknown }>;
   /**
-   * Инструкция режима правки одного блока (волна 8.5): расширить / сократить /
-   * перепроверить. Подмешивается в userMessage блока через buildContextPreamble.
-   * Пусто при обычной (пере)генерации. Не меняет структуру JSON блока.
+   * Директива правки одного блока (волна 8.5): расширить / сократить /
+   * перепроверить, и/или свободная инструкция руководителя (чат-правка).
+   * Подмешивается в userMessage блока через buildContextPreamble. Пусто при
+   * обычной (пере)генерации. Не меняет структуру JSON блока и не отменяет
+   * тиерную дисциплину — свободная инструкция явно требует не выдумывать факты.
    */
   modeDirective?: string;
   /** Прямая подстановка evidence (используется chat-edit/тестами). */

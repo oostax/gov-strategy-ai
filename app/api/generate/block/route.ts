@@ -4,8 +4,9 @@ import { getStorage } from "@/lib/storage/local-json-storage";
 import {
   getMeetingBlocksState,
   regenerateMeetingBlock,
+  restoreMeetingBlock,
 } from "@/lib/agents/meeting-blocks/orchestrator";
-import { readMeetingRun } from "@/lib/agents/meeting-blocks/storage";
+import { countBlockVersions, readMeetingRun } from "@/lib/agents/meeting-blocks/storage";
 import {
   MEETING_BLOCK_LABELS,
   MEETING_BLOCK_ORDER,
@@ -30,8 +31,16 @@ function validateId(id: string): boolean {
 const editBlockRequestSchema = z.object({
   sessionId: z.string(),
   blockKind: z.enum(MEETING_BLOCK_ORDER as [MeetingBlockKind, ...MeetingBlockKind[]]),
-  // rebuild — обычная пересборка; expand/shorten/recheck — режимы правки объёма/проверки.
-  mode: z.enum(["rebuild", "expand", "shorten", "recheck"]).optional().default("rebuild"),
+  // rebuild — обычная пересборка; expand/shorten/recheck — режимы правки объёма/
+  // проверки; undo — вернуть предыдущую версию блока из стека версий (без LLM).
+  mode: z
+    .enum(["rebuild", "expand", "shorten", "recheck", "undo"])
+    .optional()
+    .default("rebuild"),
+  // Свободная инструкция руководителя (чат-правка, остаток волны 8.5): точная
+  // формулировка правки, применяется как направленная пересборка (rebuild).
+  // Игнорируется при mode="undo".
+  instruction: z.string().trim().max(500).optional(),
   // Необязательный runId: по умолчанию берём текущий прогон сессии.
   runId: z.string().optional(),
 });
@@ -60,10 +69,13 @@ async function resolveRegion(session: { region?: string; regionId?: string }) {
 }
 
 /**
- * POST /api/generate/block — правка одного готового блока встречи (волна 8.5).
- * Тело: { sessionId, blockKind, mode?, runId? }. Перезапускает ТОЛЬКО указанный
- * блок и пересобирает материал, не трогая остальные блоки. Возвращает новый
- * статус и, если готово, обновлённый structured output.
+ * POST /api/generate/block — правка одного готового блока встречи (волна 8.5
+ * + остаток: версионирование/undo, чат-правки инструкцией).
+ * Тело: { sessionId, blockKind, mode?, instruction?, runId? }. Перезапускает
+ * ТОЛЬКО указанный блок (либо восстанавливает предыдущую версию при
+ * mode="undo", без LLM) и пересобирает материал, не трогая остальные блоки.
+ * Возвращает новый статус и, если готово, обновлённый structured output +
+ * versionsCount/canUndo для этого блока (доступность кнопки «Отменить»).
  */
 export async function POST(request: Request) {
   let sessionIdForLog: string | undefined;
@@ -114,6 +126,58 @@ export async function POST(request: Request) {
 
     const region = await resolveRegion(details.session);
 
+    // mode="undo" — отдельная ветка: без LLM, восстановление снапшота из
+    // стека версий. Отсутствие версий — ожидаемое состояние (первая правка
+    // блока или стек уже пуст), возвращаем внятный 409, а не падаем как 502.
+    if (input.mode === "undo") {
+      try {
+        const { output } = await restoreMeetingBlock(details.session, region, run, input.blockKind);
+        const versionsCount = await countBlockVersions(input.sessionId, run.runId, input.blockKind);
+        await logBlockEvent({
+          sessionId: input.sessionId,
+          runId: run.runId,
+          scope: "blocks.api",
+          message: "undo_block_ready",
+          data: { blockKind: input.blockKind },
+        });
+        return NextResponse.json({
+          status: "ready",
+          sessionId: input.sessionId,
+          runId: run.runId,
+          blockKind: input.blockKind,
+          mode: input.mode,
+          label: MEETING_BLOCK_LABELS[input.blockKind],
+          output,
+          versionsCount,
+          canUndo: versionsCount > 0,
+        });
+      } catch (undoError) {
+        const message = undoError instanceof Error ? undoError.message : String(undoError);
+        console.error(`[block] undo failed for ${input.sessionId}/${input.blockKind}:`, message);
+        await logBlockEvent({
+          sessionId: input.sessionId,
+          runId: run.runId,
+          scope: "blocks.api",
+          message: "undo_block_failed",
+          data: { blockKind: input.blockKind, error: message },
+        });
+        // Нет версий для отмены — это ожидаемое состояние кнопки, а не сбой
+        // генерации: 409, как и для «нет прогона для правки» выше.
+        return NextResponse.json(
+          {
+            status: "error",
+            sessionId: input.sessionId,
+            runId: run.runId,
+            blockKind: input.blockKind,
+            error: { message: "Нет предыдущей версии блока для отмены" },
+            versionsCount: 0,
+            canUndo: false,
+          },
+          { status: 409 },
+        );
+      }
+    }
+
     try {
       const { output } = await regenerateMeetingBlock(
         details.session,
@@ -121,7 +185,9 @@ export async function POST(request: Request) {
         run,
         input.blockKind,
         input.mode,
+        input.instruction,
       );
+      const versionsCount = await countBlockVersions(input.sessionId, run.runId, input.blockKind);
       await logBlockEvent({
         sessionId: input.sessionId,
         runId: run.runId,
@@ -137,6 +203,8 @@ export async function POST(request: Request) {
         mode: input.mode,
         label: MEETING_BLOCK_LABELS[input.blockKind],
         output,
+        versionsCount,
+        canUndo: versionsCount > 0,
       });
     } catch (genError) {
       const message = genError instanceof Error ? genError.message : String(genError);
@@ -151,6 +219,9 @@ export async function POST(request: Request) {
       // Прежний материал сохранён (regenerateMeetingBlock не затирает данные блока
       // при сбое). Возвращаем текущее состояние, чтобы фронт мог показать его.
       const state = await getMeetingBlocksState(input.sessionId, run.runId).catch(() => null);
+      const versionsCount = await countBlockVersions(input.sessionId, run.runId, input.blockKind).catch(
+        () => 0,
+      );
       return NextResponse.json(
         {
           status: "error",
@@ -159,6 +230,8 @@ export async function POST(request: Request) {
           blockKind: input.blockKind,
           error: { message },
           currentStatus: state?.status ?? "ready",
+          versionsCount,
+          canUndo: versionsCount > 0,
         },
         { status: 502 },
       );

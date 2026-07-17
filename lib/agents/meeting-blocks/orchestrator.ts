@@ -31,6 +31,7 @@ import { assembleMeetingBlocks, toTypedMeetingOutput } from "./assembler";
 import { synthesizeMeetingHeader } from "./synthesis";
 import {
   createMeetingRun,
+  popBlockVersion,
   readBlockData,
   readMeetingRun,
   structuredErrorPath,
@@ -38,6 +39,7 @@ import {
   updateBlockState,
   updateRun,
   writeBlockData,
+  writeBlockVersion,
   writeStructuredOutput,
 } from "./storage";
 
@@ -452,12 +454,48 @@ async function continueMeetingBlocks(
 }
 
 /**
+ * Строит директиву режима правки для промпта блока: базовая директива режима
+ * (expand/shorten/recheck) + свободная инструкция руководителя (чат-правки,
+ * задача 2 остатка волны 8.5), если она задана. Инструкция руководителя
+ * ВСЕГДА идёт с явным напоминанием тиерной дисциплины — свободный текст
+ * инструкции не должен снимать запрет на выдуманные факты/цифры.
+ *
+ * Принимает только режимы, идущие в LLM (undo обрабатывается отдельной веткой
+ * restoreMeetingBlock и никогда не порождает промпт — гарантия на уровне типов).
+ */
+function buildModeDirective(
+  mode: Exclude<MeetingBlockMode, "undo">,
+  instruction?: string,
+): string | undefined {
+  const parts: string[] = [];
+  if (mode !== "rebuild") {
+    parts.push(MEETING_BLOCK_MODE_DIRECTIVES[mode]);
+  }
+  const trimmedInstruction = instruction?.trim();
+  if (trimmedInstruction) {
+    parts.push(
+      `ИНСТРУКЦИЯ РУКОВОДИТЕЛЯ: ${trimmedInstruction}. Выполни её в рамках тирной дисциплины: ` +
+        "не выдумывай факты/цифры/суммы/проценты без источника; новое непроверяемое оформляй " +
+        "как hypothesis/ask. НЕ меняй структуру JSON блока.",
+    );
+  }
+  return parts.length ? parts.join("\n\n") : undefined;
+}
+
+/**
  * Волна 8.5 — правка ОДНОГО готового блока встречи по кнопке.
  * Перезапускает генератор только указанного блока с теми же deps и priorBlocks,
  * что и оркестратор (region/ministry/lprName/focusTopic/agentInstructions/
  * regionContext/sberProjectsContext/memoryContext/trustedCrmContext), затем
  * ПЕРЕСОБИРАЕТ output (assemble + synthesis + quality gate + запись), не трогая
- * остальные блоки. mode добавляет в промпт блока директиву объёма/перепроверки.
+ * остальные блоки. mode добавляет в промпт блока директиву объёма/перепроверки;
+ * instruction (остаток волны 8.5, чат-правки) — свободную формулировку
+ * руководителя, приклеенную к той же директиве с явным напоминанием тиерной
+ * дисциплины.
+ *
+ * Перед перезаписью блока текущее (предыдущее) содержимое блока снапшотится в
+ * стек версий прогона (остаток волны 8.5, undo) — «Отменить» сможет вернуть
+ * его без вызова LLM.
  *
  * Соблюдает существующие таймауты (BLOCK_TIMEOUT_MS), логи и мягкий гейт
  * готовности. Прогон должен существовать и содержать этот блок в плане.
@@ -467,7 +505,8 @@ export async function regenerateMeetingBlock(
   region: RegionProfile | null,
   run: MeetingBlockRun,
   blockKind: MeetingBlockKind,
-  mode: MeetingBlockMode = "rebuild",
+  mode: Exclude<MeetingBlockMode, "undo"> = "rebuild",
+  instruction?: string,
 ): Promise<{ output: TypedOutput; run: MeetingBlockRun }> {
   const startedAtMs = Date.now();
   const plan = run.plan;
@@ -484,15 +523,28 @@ export async function regenerateMeetingBlock(
   }
 
   console.log(
-    `[meeting-blocks][edit] start session=${session.id} run=${run.runId} block=${blockKind} mode=${mode}`,
+    `[meeting-blocks][edit] start session=${session.id} run=${run.runId} block=${blockKind} mode=${mode} hasInstruction=${Boolean(instruction?.trim())}`,
   );
   await logBlockEvent({
     sessionId: session.id,
     runId: run.runId,
     scope: "meeting.block",
     message: "edit_start",
-    data: { kind: blockKind, mode },
+    data: { kind: blockKind, mode, hasInstruction: Boolean(instruction?.trim()) },
   });
+
+  // Снапшот ПРЕДЫДУЩЕГО содержимого блока в стек версий — до любой перезаписи
+  // (undo, остаток волны 8.5). Снапшотим то, что реально лежит на диске сейчас,
+  // а не run.blocks (может быть неполным при гонках чтения/записи).
+  const existing = await readBlockData(run.sessionId, run.runId, blockKind);
+  if (existing) {
+    await writeBlockVersion(run.sessionId, run.runId, blockKind, {
+      kind: blockKind,
+      state: existing.state,
+      data: existing.data,
+      updatedAt: new Date().toISOString(),
+    });
+  }
 
   let current = await updateRun(run, { status: "generating", error: undefined });
 
@@ -504,8 +556,7 @@ export async function regenerateMeetingBlock(
   } catch {
     priorBlocks = [];
   }
-  const modeDirective =
-    mode === "rebuild" ? undefined : MEETING_BLOCK_MODE_DIRECTIVES[mode];
+  const modeDirective = buildModeDirective(mode, instruction);
   const deps: MeetingBlockDeps = { ...baseDeps, priorBlocks, modeDirective };
 
   const startedAt = new Date().toISOString();
@@ -547,6 +598,11 @@ export async function regenerateMeetingBlock(
     });
     // Не затираем прежний готовый блок при сбое правки: помечаем статус блока,
     // но оставляем его data. Прогон возвращаем в ready — материал остаётся прежним.
+    // Снапшот версии, снятый выше, откатываем: правка не состоялась, данные
+    // блока не менялись — незачем копить в стеке версию, идентичную текущей.
+    if (existing) {
+      await popBlockVersion(run.sessionId, run.runId, blockKind).catch(() => undefined);
+    }
     await updateBlockState(current, blockKind, {
       status: "ready",
       completedAt: new Date().toISOString(),
@@ -557,6 +613,69 @@ export async function regenerateMeetingBlock(
   }
 
   // Пересборка полного output из блоков (изменён только один блок).
+  current = (await readMeetingRun(current.sessionId, current.runId)) || current;
+  return finalizeMeetingRun(session, region, plan, current, startedAtMs);
+}
+
+/**
+ * Остаток волны 8.5 — «Отменить»: возвращает предыдущую версию блока из стека
+ * версий (popBlockVersion), БЕЗ вызова LLM. Данные блока кладутся обратно
+ * через writeBlockData, затем материал пересобирается через ОБЩИЙ
+ * finalizeMeetingRun (те же quality gate/synthesis/запись, что и при обычной
+ * (пере)генерации) — чтобы восстановленный блок дал консистентный output.
+ *
+ * Бросает ошибку, если стек версий для этого блока пуст (вызывающая сторона —
+ * route.ts — должна вернуть понятный 409, а не тихо промолчать).
+ */
+export async function restoreMeetingBlock(
+  session: SessionProfile,
+  region: RegionProfile | null,
+  run: MeetingBlockRun,
+  blockKind: MeetingBlockKind,
+): Promise<{ output: TypedOutput; run: MeetingBlockRun }> {
+  const startedAtMs = Date.now();
+  const plan = run.plan;
+
+  const previous = await popBlockVersion(run.sessionId, run.runId, blockKind);
+  if (!previous) {
+    throw new Error(`No previous version to restore for block ${blockKind}`);
+  }
+
+  console.log(
+    `[meeting-blocks][undo] start session=${session.id} run=${run.runId} block=${blockKind}`,
+  );
+  await logBlockEvent({
+    sessionId: session.id,
+    runId: run.runId,
+    scope: "meeting.block",
+    message: "undo_start",
+    data: { kind: blockKind },
+  });
+
+  let current = await updateRun(run, { status: "generating", error: undefined });
+  // Кладём снапшот обратно как текущие данные блока — без вызова генератора.
+  current = await writeBlockData(
+    current,
+    blockKind,
+    {
+      ...previous.state,
+      status: previous.state.status,
+      completedAt: new Date().toISOString(),
+      error: undefined,
+    },
+    previous.data,
+  );
+
+  console.log(`[meeting-blocks][undo] ${blockKind} restored in ${elapsedMs(startedAtMs)}`);
+  await logBlockEvent({
+    sessionId: session.id,
+    runId: current.runId,
+    scope: "meeting.block",
+    message: "undo_ready",
+    data: { kind: blockKind, elapsedMs: Date.now() - startedAtMs },
+  });
+
+  // Пересборка полного output из блоков (изменён только восстановленный блок).
   current = (await readMeetingRun(current.sessionId, current.runId)) || current;
   return finalizeMeetingRun(session, region, plan, current, startedAtMs);
 }
