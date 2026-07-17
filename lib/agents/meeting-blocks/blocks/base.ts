@@ -326,6 +326,9 @@ export async function callBlockLLM(
 
 export function buildContextPreamble(deps: MeetingBlockDeps): string {
   return [
+    // Режим правки одного блока (волна 8.5) — впереди контекста, чтобы модель
+    // применяла его к своему блоку. При обычной генерации пусто.
+    deps.modeDirective ? deps.modeDirective.trim() : "",
     deps.regionContext
       ? `Контекст из карточки региона и сохранённых данных:\n${deps.regionContext}`
       : "",

@@ -18,9 +18,11 @@ import { generateAgendaBlock } from "./blocks/agenda";
 import { generateAfterBlock } from "./blocks/after";
 import {
   MEETING_BLOCK_LABELS,
+  MEETING_BLOCK_MODE_DIRECTIVES,
   MEETING_BLOCK_ORDER,
   type MeetingBlockDeps,
   type MeetingBlockKind,
+  type MeetingBlockMode,
   type MeetingBlockPlan,
   type MeetingBlockRun,
   type MeetingBlocksPlan,
@@ -216,6 +218,118 @@ async function persistMeetingFacts(sessionId: string, plan: MeetingBlocksPlan, o
   }
 }
 
+/**
+ * Собирает базовый набор deps встречи (без priorBlocks). Вынесено, чтобы полная
+ * генерация (continueMeetingBlocks) и правка одного блока (regenerateMeetingBlock)
+ * строили ОДИНАКОВЫЙ контекст: region/ministry/lprName/focusTopic/agentInstructions/
+ * regionContext/sberProjectsContext/memoryContext/trustedCrmContext.
+ */
+async function buildBaseMeetingDeps(
+  session: SessionProfile,
+  region: RegionProfile | null,
+  plan: MeetingBlocksPlan,
+  runId: string,
+  prompt: string,
+): Promise<MeetingBlockDeps> {
+  return {
+    session,
+    runId,
+    region: plan.region,
+    ministry: plan.ministry,
+    lprName: plan.lprName,
+    lprRole: plan.lprRole,
+    focusTopic: [plan.focusTopic, prompt].filter(Boolean).join(" ").trim(),
+    agentInstructions: await loadAgentInstructions(session),
+    regionContext: formatRegionContext(region, { includeSberPortfolio: true }),
+    sberProjectsContext: await loadSberProjectsContext(plan, prompt),
+    memoryContext: await loadMemoryContext(plan, prompt),
+    trustedCrmContext: buildTrustedCrmContext(region),
+  };
+}
+
+/**
+ * Финальная сборка прогона: assemble → синтез шапки (некритичный, по таймауту) →
+ * мягкий гейт готовности (toTypedMeetingOutput) → запись structured output →
+ * очистка error → persist фактов → статус ready. Используется и полной генерацией,
+ * и правкой одного блока — чтобы quality gate/логи/фолбэки были идентичны.
+ */
+async function finalizeMeetingRun(
+  session: SessionProfile,
+  region: RegionProfile | null,
+  plan: MeetingBlocksPlan,
+  initialRun: MeetingBlockRun,
+  generationStartedAt: number,
+): Promise<{ output: TypedOutput; run: MeetingBlockRun }> {
+  let run = (await readMeetingRun(initialRun.sessionId, initialRun.runId)) || initialRun;
+  run = await updateRun(run, { status: "assembling" });
+  const blocks = await collectReadyBlocks(run);
+  const assembled = assembleMeetingBlocks({ session, blocks });
+  if (plan.sectionOrder?.length) assembled.sectionOrder = plan.sectionOrder;
+
+  // Синтез — обогащающий слой, некритичный. Ограничиваем по времени.
+  try {
+    const synthesisTimeoutMs = Number(process.env.MEETING_SYNTHESIS_TIMEOUT_MS || 60_000);
+    const header = await withTimeout(
+      synthesizeMeetingHeader(assembled),
+      synthesisTimeoutMs,
+      `Synthesis timeout after ${synthesisTimeoutMs}ms`,
+    );
+    if (header.mainThesis) assembled.mainThesis = header.mainThesis;
+    // Гуард 10d4806: синтез НЕ перезаписывает цель встречи, заданную пользователем.
+    if (header.meetingGoal && !session.meetingGoal?.trim()) {
+      assembled.meetingGoal = header.meetingGoal;
+    }
+    if (header.proposal && !assembled.proposal) assembled.proposal = header.proposal;
+  } catch (err) {
+    console.warn("[meeting-blocks][synthesis] skipped", err);
+  }
+
+  let output: TypedOutput;
+  try {
+    // Мягкий гейт готовности внутри toTypedMeetingOutput.
+    output = toTypedMeetingOutput(assembled, session.taskType);
+    await writeStructuredOutput(session.id, output);
+  } catch (assemblyError) {
+    const message = assemblyError instanceof Error ? assemblyError.message : String(assemblyError);
+    console.error(`[meeting-blocks][assemble] finalize failed: ${message}`);
+    run = await updateRun(run, { status: "error", error: { message } });
+    await logBlockEvent({
+      sessionId: session.id,
+      runId: run.runId,
+      scope: "meeting.assemble",
+      message: "failed",
+      data: { error: message },
+    });
+    throw assemblyError;
+  }
+
+  try {
+    const fs = await import("fs/promises");
+    await fs.unlink(structuredErrorPath(session.id));
+  } catch {}
+
+  // Persist в MemPalace: компактные факты встречи для будущих сессий (best-effort).
+  await persistMeetingFacts(session.id, plan, output);
+
+  run = await updateRun(run, {
+    status: "ready",
+    completedAt: new Date().toISOString(),
+    outputPath: structuredOutputPath(session.id),
+  });
+  console.log(
+    `[meeting-blocks][assemble] ready total=${elapsedMs(generationStartedAt)} blocks=${blocks.length}`,
+  );
+  await logBlockEvent({
+    sessionId: session.id,
+    runId: run.runId,
+    scope: "meeting.assemble",
+    message: "ready",
+    data: { totalElapsedMs: Date.now() - generationStartedAt, blocks: blocks.length },
+  });
+
+  return { output, run };
+}
+
 async function continueMeetingBlocks(
   session: SessionProfile,
   region: RegionProfile | null,
@@ -237,20 +351,13 @@ async function continueMeetingBlocks(
     data: { region: plan.region, ministry: plan.ministry, blocks: plan.blocks.length },
   });
 
-  const baseDeps: MeetingBlockDeps = {
+  const baseDeps: MeetingBlockDeps = await buildBaseMeetingDeps(
     session,
-    runId: run.runId,
-    region: plan.region,
-    ministry: plan.ministry,
-    lprName: plan.lprName,
-    lprRole: plan.lprRole,
-    focusTopic: [plan.focusTopic, prompt].filter(Boolean).join(" ").trim(),
-    agentInstructions: await loadAgentInstructions(session),
-    regionContext: formatRegionContext(region, { includeSberPortfolio: true }),
-    sberProjectsContext: await loadSberProjectsContext(plan, prompt),
-    memoryContext: await loadMemoryContext(plan, prompt),
-    trustedCrmContext: buildTrustedCrmContext(region),
-  };
+    region,
+    plan,
+    run.runId,
+    prompt,
+  );
   if (baseDeps.memoryContext) {
     console.log(`[meeting-blocks][memory] retrieved ${baseDeps.memoryContext.split("\n").length} prior context lines`);
   }
@@ -341,73 +448,117 @@ async function continueMeetingBlocks(
   }
 
   // ── Сборка ──────────────────────────────────────────────────────────────────
-  run = (await readMeetingRun(run.sessionId, run.runId)) || run;
-  run = await updateRun(run, { status: "assembling" });
-  const blocks = await collectReadyBlocks(run);
-  const assembled = assembleMeetingBlocks({ session, blocks });
-  if (plan.sectionOrder?.length) assembled.sectionOrder = plan.sectionOrder;
+  return finalizeMeetingRun(session, region, plan, run, generationStartedAt);
+}
 
-  // Синтез — обогащающий слой, некритичный. Ограничиваем по времени.
-  try {
-    const synthesisTimeoutMs = Number(process.env.MEETING_SYNTHESIS_TIMEOUT_MS || 60_000);
-    const header = await withTimeout(
-      synthesizeMeetingHeader(assembled),
-      synthesisTimeoutMs,
-      `Synthesis timeout after ${synthesisTimeoutMs}ms`,
-    );
-    if (header.mainThesis) assembled.mainThesis = header.mainThesis;
-    if (header.meetingGoal && !session.meetingGoal?.trim()) {
-      assembled.meetingGoal = header.meetingGoal;
-    }
-    if (header.proposal && !assembled.proposal) assembled.proposal = header.proposal;
-  } catch (err) {
-    console.warn("[meeting-blocks][synthesis] skipped", err);
+/**
+ * Волна 8.5 — правка ОДНОГО готового блока встречи по кнопке.
+ * Перезапускает генератор только указанного блока с теми же deps и priorBlocks,
+ * что и оркестратор (region/ministry/lprName/focusTopic/agentInstructions/
+ * regionContext/sberProjectsContext/memoryContext/trustedCrmContext), затем
+ * ПЕРЕСОБИРАЕТ output (assemble + synthesis + quality gate + запись), не трогая
+ * остальные блоки. mode добавляет в промпт блока директиву объёма/перепроверки.
+ *
+ * Соблюдает существующие таймауты (BLOCK_TIMEOUT_MS), логи и мягкий гейт
+ * готовности. Прогон должен существовать и содержать этот блок в плане.
+ */
+export async function regenerateMeetingBlock(
+  session: SessionProfile,
+  region: RegionProfile | null,
+  run: MeetingBlockRun,
+  blockKind: MeetingBlockKind,
+  mode: MeetingBlockMode = "rebuild",
+): Promise<{ output: TypedOutput; run: MeetingBlockRun }> {
+  const startedAtMs = Date.now();
+  const plan = run.plan;
+  const prompt = run.prompt ?? "";
+
+  const generator = BLOCK_GENERATORS[blockKind];
+  if (!generator) {
+    throw new Error(`No generator for ${blockKind}`);
+  }
+  // Блок должен быть частью плана этого прогона (иначе нечего пересобирать).
+  const planned = plan.blocks.find((b) => b.kind === blockKind);
+  if (!planned) {
+    throw new Error(`Block ${blockKind} is not part of run ${run.runId}`);
   }
 
-  let output: TypedOutput;
-  try {
-    // Мягкий гейт готовности внутри toTypedMeetingOutput.
-    output = toTypedMeetingOutput(assembled, session.taskType);
-    await writeStructuredOutput(session.id, output);
-  } catch (assemblyError) {
-    const message = assemblyError instanceof Error ? assemblyError.message : String(assemblyError);
-    console.error(`[meeting-blocks][assemble] finalize failed: ${message}`);
-    run = await updateRun(run, { status: "error", error: { message } });
-    await logBlockEvent({
-      sessionId: session.id,
-      runId: run.runId,
-      scope: "meeting.assemble",
-      message: "failed",
-      data: { error: message },
-    });
-    throw assemblyError;
-  }
-
-  try {
-    const fs = await import("fs/promises");
-    await fs.unlink(structuredErrorPath(session.id));
-  } catch {}
-
-  // Persist в MemPalace: компактные факты встречи для будущих сессий (best-effort).
-  await persistMeetingFacts(session.id, plan, output);
-
-  run = await updateRun(run, {
-    status: "ready",
-    completedAt: new Date().toISOString(),
-    outputPath: structuredOutputPath(session.id),
-  });
   console.log(
-    `[meeting-blocks][assemble] ready total=${elapsedMs(generationStartedAt)} blocks=${blocks.length}`,
+    `[meeting-blocks][edit] start session=${session.id} run=${run.runId} block=${blockKind} mode=${mode}`,
   );
   await logBlockEvent({
     sessionId: session.id,
     runId: run.runId,
-    scope: "meeting.assemble",
-    message: "ready",
-    data: { totalElapsedMs: Date.now() - generationStartedAt, blocks: blocks.length },
+    scope: "meeting.block",
+    message: "edit_start",
+    data: { kind: blockKind, mode },
   });
 
-  return { output, run };
+  let current = await updateRun(run, { status: "generating", error: undefined });
+
+  // Те же deps, что и в полной генерации; priorBlocks — из уже готовых блоков.
+  const baseDeps = await buildBaseMeetingDeps(session, region, plan, current.runId, prompt);
+  let priorBlocks: Array<{ kind: MeetingBlockKind; data: unknown }> = [];
+  try {
+    priorBlocks = (await collectReadyBlocks(current)).filter((b) => b.kind !== blockKind);
+  } catch {
+    priorBlocks = [];
+  }
+  const modeDirective =
+    mode === "rebuild" ? undefined : MEETING_BLOCK_MODE_DIRECTIVES[mode];
+  const deps: MeetingBlockDeps = { ...baseDeps, priorBlocks, modeDirective };
+
+  const startedAt = new Date().toISOString();
+  await updateBlockState(current, blockKind, {
+    status: "generating",
+    startedAt,
+    error: undefined,
+  });
+
+  try {
+    const data = await withTimeout(
+      generator(deps, planned.searchQueries),
+      BLOCK_TIMEOUT_MS,
+      `Block ${blockKind} timeout after ${BLOCK_TIMEOUT_MS}ms`,
+    );
+    await writeBlockData(
+      current,
+      blockKind,
+      { kind: blockKind, status: "ready", startedAt, completedAt: new Date().toISOString() },
+      data,
+    );
+    console.log(`[meeting-blocks][edit] ${blockKind} regenerated in ${elapsedMs(startedAtMs)}`);
+    await logBlockEvent({
+      sessionId: session.id,
+      runId: current.runId,
+      scope: "meeting.block",
+      message: "edit_ready",
+      data: { kind: blockKind, mode, elapsedMs: Date.now() - startedAtMs },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`[meeting-blocks][edit] ${blockKind} failed in ${elapsedMs(startedAtMs)}: ${message}`);
+    await logBlockEvent({
+      sessionId: session.id,
+      runId: current.runId,
+      scope: "meeting.block",
+      message: "edit_failed",
+      data: { kind: blockKind, mode, error: message },
+    });
+    // Не затираем прежний готовый блок при сбое правки: помечаем статус блока,
+    // но оставляем его data. Прогон возвращаем в ready — материал остаётся прежним.
+    await updateBlockState(current, blockKind, {
+      status: "ready",
+      completedAt: new Date().toISOString(),
+      error: message,
+    });
+    current = await updateRun(current, { status: "ready" });
+    throw error;
+  }
+
+  // Пересборка полного output из блоков (изменён только один блок).
+  current = (await readMeetingRun(current.sessionId, current.runId)) || current;
+  return finalizeMeetingRun(session, region, plan, current, startedAtMs);
 }
 
 export async function startMeetingBlocks(

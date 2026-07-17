@@ -20,6 +20,8 @@ export async function generateAfterBlock(
     deps.ministry ? `Ведомство: ${deps.ministry}` : "",
     `Тема встречи: ${deps.focusTopic}`,
     volumeDirective(deps.session.materialPlan?.volume),
+    // Режим правки одного блока (волна 8.5). Пусто при обычной генерации.
+    deps.modeDirective ? deps.modeDirective.trim() : "",
     "",
     buildMinistryContext(deps),
     buildFollowUpContext(deps),

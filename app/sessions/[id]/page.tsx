@@ -243,7 +243,11 @@ export default function SessionPage() {
 
         {output && !loading && (
           <ErrorBoundary>
-            <StructuredDashboard output={output} />
+            <StructuredDashboard
+              output={output}
+              sessionId={sessionId}
+              onOutputChange={setOutput}
+            />
           </ErrorBoundary>
         )}
 

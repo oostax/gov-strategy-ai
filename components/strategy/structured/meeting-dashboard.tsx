@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 import {
   ArrowRight,
   BadgeCheck,
@@ -14,14 +14,21 @@ import {
   Filter as FilterIcon,
   Landmark,
   Lightbulb,
+  Loader2,
+  Maximize2,
   MessageSquare,
+  Minimize2,
   Pause,
+  RefreshCw,
+  ShieldCheck,
   Target,
   User,
   Users,
   XCircle,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import type {
   AskLadder,
@@ -38,11 +45,154 @@ import type {
   Objection,
   Source,
   SourceTier,
+  TypedOutput,
 } from "@/lib/schemas/structured-output";
 import { SourcesFooter } from "./sources-footer";
 import { VisualsSection } from "./visuals-section";
 import { SberActionPanel } from "./sber-action-panel";
 import { assessAgenda } from "@/lib/quality/meeting-output-quality";
+
+// ── Правки готового блока кнопками (волна 8.5) ────────────────────────────────
+
+/** Виды блоков встречи, для которых доступны кнопки-правки (== kind бэкенда). */
+type EditableBlockKind =
+  | "ministry"
+  | "dossier"
+  | "participants"
+  | "theses"
+  | "objections"
+  | "sber"
+  | "agenda"
+  | "after";
+
+type EditMode = "rebuild" | "expand" | "shorten" | "recheck";
+
+/**
+ * Контекст правок: sessionId + колбэк обновления материала. Прокидывается из
+ * страницы сессии. Если контекста нет (напр. предпросмотр/экспорт) — кнопки не
+ * рендерятся, дашборд остаётся чисто презентационным.
+ */
+const MeetingEditContext = createContext<{
+  sessionId?: string;
+  onUpdated?: (output: TypedOutput) => void;
+} | null>(null);
+
+const EDIT_ACTIONS: {
+  mode: EditMode;
+  label: string;
+  Icon: typeof RefreshCw;
+  variant: "outline" | "ghost";
+  // Реализовано end-to-end (true) либо помечено как TODO (false).
+  ready: boolean;
+}[] = [
+  { mode: "rebuild", label: "Пересобрать", Icon: RefreshCw, variant: "outline", ready: true },
+  { mode: "expand", label: "Расширить", Icon: Maximize2, variant: "ghost", ready: true },
+  { mode: "shorten", label: "Сократить", Icon: Minimize2, variant: "ghost", ready: true },
+  { mode: "recheck", label: "Перепроверить", Icon: ShieldCheck, variant: "ghost", ready: true },
+];
+
+/**
+ * Компактный ряд кнопок-действий над секцией встречи. Минимум «Пересобрать»
+ * работает end-to-end: POST /api/generate/block с kind этой секции, состояние
+ * загрузки, по готовности обновляет материал через onUpdated. Режимы expand/
+ * shorten/recheck передаются тем же вызовом (mode) — в промпт блока добавляется
+ * директива объёма/перепроверки.
+ */
+function BlockActionsRow({ blockKind }: { blockKind: EditableBlockKind }) {
+  const ctx = useContext(MeetingEditContext);
+  const [pending, setPending] = useState<EditMode | null>(null);
+
+  // Без sessionId (нет контекста правок) кнопки не показываем.
+  if (!ctx?.sessionId) return null;
+  const { sessionId, onUpdated } = ctx;
+
+  async function runEdit(mode: EditMode) {
+    if (pending) return;
+    setPending(mode);
+    try {
+      const res = await fetch("/api/generate/block", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, blockKind, mode }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        status?: string;
+        output?: TypedOutput;
+        error?: { message?: string } | string;
+      };
+      if (!res.ok || data.status !== "ready" || !data.output) {
+        const msg =
+          typeof data.error === "string"
+            ? data.error
+            : data.error?.message || "Не удалось обновить блок";
+        throw new Error(msg);
+      }
+      onUpdated?.(data.output);
+      const verb =
+        mode === "expand"
+          ? "расширён"
+          : mode === "shorten"
+            ? "сокращён"
+            : mode === "recheck"
+              ? "перепроверен"
+              : "пересобран";
+      toast.success(`Блок ${verb}`);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Ошибка обновления блока");
+    } finally {
+      setPending(null);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {EDIT_ACTIONS.map(({ mode, label, Icon, variant, ready }) => {
+        const isPending = pending === mode;
+        const disabled = pending !== null;
+        return (
+          <Button
+            key={mode}
+            type="button"
+            size="sm"
+            variant={variant}
+            disabled={disabled}
+            aria-busy={isPending}
+            title={ready ? label : `${label} (скоро)`}
+            onClick={() => runEdit(mode)}
+          >
+            {isPending ? <Loader2 className="animate-spin" /> : <Icon />}
+            {label}
+          </Button>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * Обёртка секции с рядом кнопок-правок в правом верхнем углу. Кнопки позициони-
+ * руются абсолютно, чтобы не менять внутреннюю вёрстку карточек секций.
+ */
+function EditableSection({
+  blockKind,
+  children,
+}: {
+  blockKind: EditableBlockKind;
+  children: ReactNode;
+}) {
+  const ctx = useContext(MeetingEditContext);
+  if (!ctx?.sessionId) return <>{children}</>;
+  return (
+    <div className="relative">
+      <div className="pointer-events-none absolute right-3 top-3 z-10 flex justify-end">
+        <div className="pointer-events-auto rounded-xl border bg-card/90 p-1 shadow-sm backdrop-blur">
+          <BlockActionsRow blockKind={blockKind} />
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
 
 // ── Тиерная модель честности: маленькие бейджи источника ─────────────────────
 const TIER_META: Record<
@@ -171,7 +321,17 @@ const DEFAULT_MEETING_ORDER = [
   "sources",
 ];
 
-export function MeetingDashboard({ data }: { data: MeetingOutput }) {
+export function MeetingDashboard({
+  data,
+  sessionId,
+  onUpdated,
+}: {
+  data: MeetingOutput;
+  /** Сессия для правок блоков кнопками (волна 8.5). Без неё кнопки скрыты. */
+  sessionId?: string;
+  /** Колбэк с обновлённым материалом после правки одного блока. */
+  onUpdated?: (output: TypedOutput) => void;
+}) {
   const portrait = data.ministryPortrait;
   const hasPortrait =
     portrait &&
@@ -188,50 +348,69 @@ export function MeetingDashboard({ data }: { data: MeetingOutput }) {
   const theses = (data.theses ?? []).filter((t) => nonEmpty(t.text));
   const agenda = (data.agenda ?? []).filter((b) => nonEmpty(b.topic) || nonEmpty(b.sberSays));
   const objections = (data.objections ?? []).filter((o) => nonEmpty(o.objection));
+  const hasAfter = hasAfterContent(data);
 
   // Секции по id реестра: рендерятся в порядке плана (data.sectionOrder), с
   // пропуском отключённых/пустых. Fallback — DEFAULT_MEETING_ORDER.
+  // Каждая секция-блок обёрнута в EditableSection (ряд кнопок-правок, волна 8.5);
+  // sources не блок (нет генератора) — без кнопок.
   const sectionById: Record<string, ReactNode> = {
     ministry: hasPortrait ? (
       <div key="ministry" id="ministry" className="scroll-mt-56">
-        <MinistryPortraitSection portrait={portrait} />
+        <EditableSection blockKind="ministry">
+          <MinistryPortraitSection portrait={portrait} />
+        </EditableSection>
       </div>
     ) : null,
     dossier: hasDossier ? (
       <div key="dossier" id="lpr" className="scroll-mt-56">
-        <LprSection dossier={dossier} />
+        <EditableSection blockKind="dossier">
+          <LprSection dossier={dossier} />
+        </EditableSection>
       </div>
     ) : null,
     participants: participants.length > 0 ? (
       <div key="participants" id="players" className="scroll-mt-56">
-        <ParticipantsSection participants={participants} />
+        <EditableSection blockKind="participants">
+          <ParticipantsSection participants={participants} />
+        </EditableSection>
       </div>
     ) : null,
     theses: theses.length > 0 ? (
       <div key="theses" id="theses" className="scroll-mt-56">
-        <ThesesSection theses={theses} />
+        <EditableSection blockKind="theses">
+          <ThesesSection theses={theses} />
+        </EditableSection>
       </div>
     ) : null,
     sber: (data.sberActions?.length ?? 0) > 0 ? (
       <div key="sber" id="sber-actions" className="scroll-mt-56">
-        <SberActionPanel actions={data.sberActions ?? []} />
+        <EditableSection blockKind="sber">
+          <SberActionPanel actions={data.sberActions ?? []} />
+        </EditableSection>
       </div>
     ) : null,
     agenda: agenda.length > 0 ? (
       <div key="agenda" id="agenda" className="scroll-mt-56">
-        <AgendaSection agenda={agenda} />
+        <EditableSection blockKind="agenda">
+          <AgendaSection agenda={agenda} />
+        </EditableSection>
       </div>
     ) : null,
     objections: objections.length > 0 ? (
       <div key="objections" id="objections" className="scroll-mt-56">
-        <ObjectionsSection objections={objections} />
+        <EditableSection blockKind="objections">
+          <ObjectionsSection objections={objections} />
+        </EditableSection>
       </div>
     ) : null,
-    after: (
+    after: hasAfter ? (
       <div key="after" id="follow-up" className="scroll-mt-56">
-        <AfterMeetingSection data={data} />
+        <EditableSection blockKind="after">
+          <AfterMeetingSection data={data} />
+        </EditableSection>
       </div>
-    ),
+    ) : null,
     sources: (
       <div key="sources" id="sources" className="scroll-mt-56 space-y-3">
         <TierCounters data={data} />
@@ -256,24 +435,44 @@ export function MeetingDashboard({ data }: { data: MeetingOutput }) {
   }
 
   return (
-    <div className="space-y-5">
-      {/* Hero: цель + лестница запросов + тезис/предложение/артефакт */}
-      <div id="decision" className="scroll-mt-56">
-        <MeetingHero data={data} />
+    <MeetingEditContext.Provider value={{ sessionId, onUpdated }}>
+      <div className="space-y-5">
+        {/* Hero: цель + лестница запросов + тезис/предложение/артефакт */}
+        <div id="decision" className="scroll-mt-56">
+          <MeetingHero data={data} />
+        </div>
+
+        {/* Легенда тиеров источников */}
+        <TierLegend />
+
+        {/* Визуалы — обрамление, вне управляемого планом порядка */}
+        <div id="visuals" className="scroll-mt-56">
+          <VisualsSection visuals={data.visuals ?? []} />
+        </div>
+
+        {/* Секции по плану материала (порядок + пропуск отключённых/пустых) */}
+        {order.map((key) => sectionById[key]).filter(Boolean)}
       </div>
-
-      {/* Легенда тиеров источников */}
-      <TierLegend />
-
-      {/* Визуалы — обрамление, вне управляемого планом порядка */}
-      <div id="visuals" className="scroll-mt-56">
-        <VisualsSection visuals={data.visuals ?? []} />
-      </div>
-
-      {/* Секции по плану материала (порядок + пропуск отключённых/пустых) */}
-      {order.map((key) => sectionById[key]).filter(Boolean)}
-    </div>
+    </MeetingEditContext.Provider>
   );
+}
+
+/** Есть ли контент в блоке «После встречи» (совпадает с логикой AfterMeetingSection). */
+function hasAfterContent(data: MeetingOutput): boolean {
+  const after = data.afterMeeting;
+  const yesSteps = after?.outcomes?.ifYes?.steps ?? data.ifYes ?? [];
+  const pauseSteps = after?.outcomes?.ifPause?.steps ?? data.ifPause ?? [];
+  const noSteps = after?.outcomes?.ifNo?.steps ?? data.ifNo ?? [];
+  const first48h = (after?.first48h ?? []).filter((s) => nonEmpty(s.action));
+  const hasSteps = [yesSteps, pauseSteps, noSteps].some(
+    (steps) => steps.some((s) => nonEmpty(s.action)),
+  );
+  const hasTrigger = [
+    after?.outcomes?.ifYes?.triggerSignal,
+    after?.outcomes?.ifPause?.triggerSignal,
+    after?.outcomes?.ifNo?.triggerSignal,
+  ].some((t) => nonEmpty(t));
+  return hasSteps || hasTrigger || first48h.length > 0;
 }
 
 // ── Hero ─────────────────────────────────────────────────────────────────────

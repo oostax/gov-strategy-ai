@@ -132,7 +132,13 @@ export default function StructuredSessionPage() {
         </div>
 
         {/* Output */}
-        {output && <StructuredDashboard output={output} />}
+        {output && (
+          <StructuredDashboard
+            output={output}
+            sessionId={sessionId}
+            onOutputChange={setOutput}
+          />
+        )}
 
         {/* Оценка → эволюция: обучает агента и обновляет правила */}
         {output && !loading && (

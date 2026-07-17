@@ -19,12 +19,26 @@ import { EconomicsSummary } from "./economics-summary";
 import { KpiStrip } from "./kpi-strip";
 import { ExecutiveHints } from "./executive-hints";
 
-export function StructuredDashboard({ output }: { output: TypedOutput }) {
+export function StructuredDashboard({
+  output,
+  sessionId,
+  onOutputChange,
+}: {
+  output: TypedOutput;
+  /** Сессия — нужна для правок блоков встречи кнопками (волна 8.5). */
+  sessionId?: string;
+  /** Колбэк обновления материала после правки блока. */
+  onOutputChange?: (output: TypedOutput) => void;
+}) {
   if (output.kind === "meeting") {
     return (
       <div className="space-y-5">
         <ExecutiveHints kind="meeting" />
-        <MeetingDashboard data={output.data as MeetingOutput} />
+        <MeetingDashboard
+          data={output.data as MeetingOutput}
+          sessionId={sessionId}
+          onUpdated={onOutputChange}
+        />
       </div>
     );
   }
