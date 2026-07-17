@@ -1,6 +1,12 @@
 import type { RegionProfile } from "@/lib/schemas/region";
 import { russianRegions } from "./russian-regions";
 
+// Короткие названия, которые пользователи вводят в формах. Храним только
+// однозначные варианты: «КБ» намеренно не является алиасом Краснодарского края.
+const REGION_ALIASES: Record<string, string> = {
+  "кк": "Краснодарский край",
+};
+
 function normalize(value: string): string {
   return value
     .toLowerCase()
@@ -52,6 +58,9 @@ export function canonicalRegionName(
   if (!raw) return "регион";
   const normalizedRaw = normalize(raw);
 
+  const alias = REGION_ALIASES[normalizedRaw];
+  if (alias) return alias;
+
   const profileMatch =
     profiles.find((item) => normalize(item.name) === normalizedRaw) ??
     profiles.find((item) => normalize(item.slug) === normalizedRaw) ??
@@ -60,4 +69,3 @@ export function canonicalRegionName(
 
   return bestSubjectMatch(raw) ?? raw;
 }
-

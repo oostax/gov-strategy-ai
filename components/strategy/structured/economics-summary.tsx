@@ -10,18 +10,31 @@ const confidenceLabel: Record<string, string> = {
   low: "требует baseline",
 };
 
+const UNKNOWN_VALUE = /нужно снять|требует уточнения|нет данных|не подтвержден/i;
+
+function displayEconomicsValue(value: string): string {
+  return UNKNOWN_VALUE.test(value) ? "Уточнить" : value;
+}
+
+function sanitizeEconomicsNote(note: string): string {
+  return note.replace(/(?:baseline\s+)?нужно снять/gi, "требуется базовый анализ");
+}
+
 export function EconomicsSummary({ economics }: { economics: Economics }) {
   const cells = [
-    economics.capex && { icon: <Wallet className="size-4" />, label: "Инвестиции (CAPEX)", value: economics.capex },
-    economics.opex && { icon: <Banknote className="size-4" />, label: "OPEX / год", value: economics.opex },
+    economics.capex && { icon: <Wallet className="size-4" />, label: "Инвестиции (CAPEX)", value: displayEconomicsValue(economics.capex) },
+    economics.opex && { icon: <Banknote className="size-4" />, label: "OPEX / год", value: displayEconomicsValue(economics.opex) },
     economics.expectedEffect && {
       icon: <TrendingUp className="size-4" />,
       label: "Ожидаемый эффект",
-      value: economics.expectedEffect,
+      value: displayEconomicsValue(economics.expectedEffect),
       accent: true,
     },
-    economics.payback && { icon: <Clock3 className="size-4" />, label: "Окупаемость", value: economics.payback },
+    economics.payback && { icon: <Clock3 className="size-4" />, label: "Окупаемость", value: displayEconomicsValue(economics.payback) },
   ].filter(Boolean) as { icon: React.ReactNode; label: string; value: string; accent?: boolean }[];
+  const hasUnknownValue = [economics.capex, economics.opex, economics.expectedEffect, economics.payback]
+    .filter((value): value is string => Boolean(value))
+    .some((value) => UNKNOWN_VALUE.test(value));
 
   if (!cells.length) return null;
 
@@ -62,8 +75,12 @@ export function EconomicsSummary({ economics }: { economics: Economics }) {
             </div>
           ))}
         </div>
-        {economics.note && (
-          <p className="mt-2 text-[11px] leading-snug text-muted-foreground">{economics.note}</p>
+        {(economics.note || hasUnknownValue) && (
+          <p className="mt-2 text-[11px] leading-snug text-muted-foreground">
+            {economics.note
+              ? sanitizeEconomicsNote(economics.note)
+              : "Финансовые параметры без подтверждённого значения требуют базового анализа."}
+          </p>
         )}
       </CardContent>
     </Card>

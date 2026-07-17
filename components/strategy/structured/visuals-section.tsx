@@ -59,7 +59,9 @@ function formatNumber(n: number): string {
 
 function formatValue(item: VisualItem): string {
   const n = displayNumber(item);
-  if (n === null) return "нужно снять";
+  // В выдаче модели это состояние может приходить текстовым плейсхолдером.
+  // Не превращаем служебную формулировку в значение финансовой/KPI-карточки.
+  if (n === null) return "Уточнить";
   // Единицу показываем только у реального числа (valueRaw); у нормализованной доли — нет.
   const showUnit = Number.isFinite(item.valueRaw) && item.unit;
   return showUnit ? `${formatNumber(n)} ${item.unit}` : formatNumber(n);
