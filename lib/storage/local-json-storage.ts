@@ -230,11 +230,40 @@ async function readJson<T>(filePath: string, fallback: T): Promise<T> {
   }
 }
 
+/**
+ * Ошибка записи хранилища: диск заполнен, нет прав на запись, ФС смонтирована
+ * read-only и т.п. Выделяем отдельным классом, чтобы вызывающий слой (например,
+ * API-роут) мог отличить сбой инфраструктуры от прочих ошибок и вернуть внятный
+ * статус вместо общего 500.
+ */
+export class StorageWriteError extends Error {
+  readonly code: string;
+  readonly filePath: string;
+
+  constructor(code: string, filePath: string, cause: unknown) {
+    super(`Сбой записи хранилища (${code}) при записи файла: ${filePath}`);
+    this.name = "StorageWriteError";
+    this.code = code;
+    this.filePath = filePath;
+    this.cause = cause;
+  }
+}
+
+const STORAGE_WRITE_ERROR_CODES = new Set(["ENOSPC", "EACCES", "EROFS", "ENOENT"]);
+
 async function writeJson<T>(filePath: string, data: T) {
-  await ensureDir(path.dirname(filePath));
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(tempPath, JSON.stringify(data, null, 2), "utf8");
-  await fs.rename(tempPath, filePath);
+  try {
+    await ensureDir(path.dirname(filePath));
+    const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    await fs.writeFile(tempPath, JSON.stringify(data, null, 2), "utf8");
+    await fs.rename(tempPath, filePath);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code && STORAGE_WRITE_ERROR_CODES.has(code)) {
+      throw new StorageWriteError(code, filePath, error);
+    }
+    throw error;
+  }
 }
 
 async function seedPlaybookMarkdown(playbooks: Playbook[]) {
@@ -279,13 +308,24 @@ async function loadStore(): Promise<StoreShape> {
   await acquireLock();
   try {
     await ensureDir(dataRoot);
+    const storePath = path.join(dataRoot, "store.json");
+    // Файла ещё не было — значит это первый запуск, и посев обязательно
+    // нужно зафиксировать на диске. Если файл уже существует, запись на
+    // диск нужна только тогда, когда мы реально что-то изменили ниже
+    // (mutated): без этого loadStore переписывал store.json на КАЖДОМ
+    // чтении (в т.ч. на каждый GET), создавая лишнюю дисковую нагрузку.
+    const existed = await fs
+      .access(storePath)
+      .then(() => true)
+      .catch(() => false);
+    let mutated = !existed;
     const now = nowIso();
     const seededPlaybooks = playbookSeed.map((playbook) => ({
       ...playbook,
       updatedAt: now,
       history: [{ version: 1, change: "Initial MVP playbook seed", createdAt: now }],
     }));
-    const store = await readJson<StoreShape>(path.join(dataRoot, "store.json"), {
+    const store = await readJson<StoreShape>(storePath, {
       sessions: [],
       outputs: [],
       feedback: [],
@@ -294,7 +334,14 @@ async function loadStore(): Promise<StoreShape> {
       regions: [],
       sberCatalog: [],
     });
-    if (store.playbooks.length === 0) store.playbooks = seededPlaybooks;
+    // Ниже — in-memory сидинг/миграция store (playbooks/regions/sberCatalog
+    // по умолчанию) выполняется как и раньше при КАЖДОМ load: гейтим только
+    // дисковую запись, а не наполнение объекта store в памяти. Адаптерные
+    // методы должны и дальше получать полностью засиженный store.
+    if (store.playbooks.length === 0) {
+      store.playbooks = seededPlaybooks;
+      mutated = true;
+    }
     if (!Array.isArray(store.regions)) store.regions = [];
     if (store.regions.length === 0) {
       store.regions = regionSeed.map((region) => ({
@@ -302,11 +349,14 @@ async function loadStore(): Promise<StoreShape> {
         createdAt: now,
         updatedAt: now,
       }));
+      mutated = true;
     }
     if (!Array.isArray(store.sberCatalog)) store.sberCatalog = [];
     if (store.sberCatalog.length === 0) {
       store.sberCatalog = sberGovProjects.map((project) => ({ ...project }));
+      mutated = true;
     }
+    const playbooksBeforeRemap = JSON.stringify(store.playbooks);
     const seedBySlug = new Map(seededPlaybooks.map((playbook) => [playbook.slug, playbook]));
     store.playbooks = store.playbooks.map((playbook) => {
       const seed = seedBySlug.get(playbook.slug);
@@ -319,9 +369,15 @@ async function loadStore(): Promise<StoreShape> {
           }
         : playbook;
     });
-    await seedPlaybookMarkdown(store.playbooks);
-    await seedMemoryFiles();
-    await writeJson(path.join(dataRoot, "store.json"), store);
+    if (JSON.stringify(store.playbooks) !== playbooksBeforeRemap) mutated = true;
+    if (mutated) {
+      // Markdown-сидинг плейбуков и файлов памяти — побочный эффект того же
+      // события (первый запуск или реальное изменение store), поэтому
+      // вызываем их только вместе с записью store.json, а не на каждом чтении.
+      await seedPlaybookMarkdown(store.playbooks);
+      await seedMemoryFiles();
+      await writeJson(storePath, store);
+    }
     return store;
   } finally {
     releaseLock();
@@ -329,7 +385,19 @@ async function loadStore(): Promise<StoreShape> {
 }
 
 async function saveStore(store: StoreShape) {
-  await writeJson(path.join(dataRoot, "store.json"), store);
+  // Раньше запись здесь шла БЕЗ лока, тогда как loadStore держит лок на
+  // время своей внутренней записи — латентная гонка при параллельных
+  // вызовах адаптера. Все методы адаптера вызывают loadStore() (который
+  // берёт и полностью ОТПУСКАЕТ лок ДО того, как вернуть управление —
+  // см. finally { releaseLock() } внутри loadStore) и только потом
+  // saveStore(): на момент этого вызова лок гарантированно свободен,
+  // повторный захват здесь не создаёт self-deadlock.
+  await acquireLock();
+  try {
+    await writeJson(path.join(dataRoot, "store.json"), store);
+  } finally {
+    releaseLock();
+  }
 }
 
 export function createLocalJsonStorage(): StorageAdapter {

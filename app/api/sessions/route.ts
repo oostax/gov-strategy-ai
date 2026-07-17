@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getMemoryClient } from "@/lib/integrations/mempalace-client";
 import { createSessionSchema } from "@/lib/schemas/session";
-import { getStorage } from "@/lib/storage/local-json-storage";
+import { getStorage, StorageWriteError } from "@/lib/storage/local-json-storage";
 import { ensureRegionForSession } from "@/lib/storage/region-resolver";
 import { buildRegionDraft } from "@/lib/agents/region-autofill";
 
@@ -75,6 +75,16 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ session }, { status: 201 });
   } catch (error) {
+    if (error instanceof StorageWriteError) {
+      console.error(
+        `[sessions] create failed: сбой записи хранилища (${error.code}) — ${error.filePath}`,
+        error,
+      );
+      return NextResponse.json(
+        { error: "Не удалось сохранить сессию: сбой записи хранилища", code: error.code },
+        { status: 507 },
+      );
+    }
     console.error("[sessions] create failed:", error);
     return NextResponse.json({ error: "Failed to create session" }, { status: 500 });
   }
