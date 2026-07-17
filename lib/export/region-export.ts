@@ -1,6 +1,7 @@
 import puppeteer from "puppeteer";
 import type { AgentOutput } from "@/lib/schemas/output";
 import type { RegionAnalysisOutput, TypedOutput } from "@/lib/schemas/structured-output";
+import { cleanSourceText } from "@/lib/quality/meeting-output-quality";
 
 function esc(value: unknown): string {
   return String(value ?? "")
@@ -92,9 +93,9 @@ export function toRegionAgentOutput(output: TypedOutput, sessionId: string): Age
     markdown: "",
     createdAt: new Date().toISOString(),
     sources: (data.sources ?? []).slice(0, 12).map((source) => ({
-      title: source.title,
+      title: cleanSourceText(source.title),
       type: "external_required" as const,
-      excerpt: source.excerpt ?? "",
+      excerpt: cleanSourceText(source.excerpt ?? ""),
       status: source.isVerified ? "used" as const : "needs_check" as const,
       url: source.url,
     })),
@@ -160,7 +161,7 @@ export function buildRegionHtml(output: TypedOutput, meta: string[] = []): strin
     ${(data.strategicPriorities?.roadmap ?? []).slice(0, 6).map((item) => `<span class="tag">${esc(item.period)} · ${esc(item.title)}</span>`).join("")}
   </div></div>
 
-  <div class="section"><h2>Источники</h2><div class="card">${(data.sources ?? []).slice(0, 10).map((source) => `<p class="muted">• ${esc(source.title)}${source.url ? ` — ${esc(source.url)}` : ""}</p>`).join("")}</div></div>
+  <div class="section"><h2>Источники</h2><div class="card">${(data.sources ?? []).slice(0, 10).map((source) => `<p class="muted">• ${esc(cleanSourceText(source.title))}${source.url ? ` — ${esc(source.url)}` : ""}</p>`).join("")}</div></div>
 </body>
 </html>`;
 }

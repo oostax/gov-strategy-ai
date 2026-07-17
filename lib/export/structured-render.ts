@@ -163,7 +163,23 @@ function sectionToBullets(section: DocSection): string[] {
   return out
     .filter((line) => line && line.trim().length > 0)
     .map((line) => compactLinks(line.trim()))
-    .map((line) => line.length > 420 ? `${line.slice(0, 417)}…` : line);
+    // Тезис на слайде не должен быть «стеной текста» и не должен обрываться
+    // посреди слова: режем по границе предложения/слова и добавляем «…».
+    .map((line) => clampAtBoundary(line, 300));
+}
+
+/**
+ * Аккуратно укорачивает строку до maxLen: сначала пытается закончить на границе
+ * предложения (. ! ?), иначе — на границе слова. Никогда не рвёт слово посреди.
+ */
+function clampAtBoundary(line: string, maxLen: number): string {
+  if (line.length <= maxLen) return line;
+  const slice = line.slice(0, maxLen);
+  const sentenceEnd = Math.max(slice.lastIndexOf(". "), slice.lastIndexOf("! "), slice.lastIndexOf("? "));
+  if (sentenceEnd >= maxLen * 0.5) return `${slice.slice(0, sentenceEnd + 1).trim()} …`;
+  const wordEnd = slice.lastIndexOf(" ");
+  const base = wordEnd >= maxLen * 0.5 ? slice.slice(0, wordEnd) : slice;
+  return `${base.trim()}…`;
 }
 
 function buildSlideXml(slide: Slide, slideIdx: number): string {

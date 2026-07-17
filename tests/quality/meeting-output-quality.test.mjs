@@ -144,6 +144,17 @@ test("cleanSourceText превращает wiki-ссылку [[url|текст]] 
   assert.equal(cleanSourceText("[[rbc.ru|РБК]]"), "РБК");
 });
 
+test("cleanSourceText вырезает висячую неполную HTML-сущность (усечение по длине)", () => {
+  // Заголовок усекли по лимиту прямо посреди «&#x420;» -> остаётся хвост «&#x4».
+  assert.equal(cleanSourceText("Закон РТ от 29.11.2025 № 81-З&#x4"), "Закон РТ от 29.11.2025 № 81-З");
+});
+
+test("cleanSourceText убирает остаточные непарные wiki-скобки", () => {
+  const cleaned = cleanSourceText("[[rbc.ru] Рустам Минниханов]");
+  assert.ok(!cleaned.includes("[["), "не должно остаться [[");
+  assert.ok(cleaned.includes("Рустам Минниханов"), "видимый текст сохранён");
+});
+
 test("cleanSourceText декодирует полное название закона из hex-сущностей", () => {
   const raw =
     "&#x417;&#x430;&#x43A;&#x43E;&#x43D; &#x420;&#x435;&#x441;&#x43F;&#x443;&#x431;&#x43B;&#x438;&#x43A;&#x438; " +
