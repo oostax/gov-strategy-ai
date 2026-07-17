@@ -102,10 +102,12 @@ export function FeedbackWidget({
   return (
     <Card className="rounded-2xl">
       <CardContent className="space-y-4 p-4">
-        <div className="flex items-center gap-2">
-          <MessageSquare className="size-4 text-muted-foreground" />
-          <h3 className="text-sm font-semibold">Оцените материал</h3>
-          <p className="text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="flex items-center gap-2">
+            <MessageSquare className="size-4 shrink-0 text-muted-foreground" />
+            <h3 className="text-sm font-semibold">Оцените материал</h3>
+          </span>
+          <p className="w-full text-xs text-muted-foreground sm:w-auto">
             Оценка используется для дообучения агента
           </p>
         </div>

@@ -56,6 +56,8 @@ export function GenerationFocusControls({
         <BarChart3 className="size-3.5" />
         Что пересобрать
       </div>
+      <div className="relative">
+      <div className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-card to-transparent sm:hidden" />
       <div className="flex gap-2 overflow-x-auto pb-0.5">
         {REGION_FOCUSES.map((focus) => {
           const Icon = focus.icon;
@@ -73,6 +75,7 @@ export function GenerationFocusControls({
             </Button>
           );
         })}
+      </div>
       </div>
     </div>
   );

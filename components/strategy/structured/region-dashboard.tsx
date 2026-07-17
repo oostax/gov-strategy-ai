@@ -322,7 +322,7 @@ function MiniBlock({ icon, label, value }: { icon: ReactNode; label: string; val
 function CoreThesisSection({ thesis }: { thesis: NonNullable<RegionAnalysisOutput["coreThesis"]> }) {
   return (
     <Card className="overflow-hidden rounded-2xl border-primary/20 bg-primary/[0.02]">
-      <CardContent className="p-4">
+      <CardContent className="p-4 sm:p-5">
         <div className="flex items-start gap-3">
           <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-primary/10">
             <Lightbulb className="size-4 text-primary" />
@@ -730,14 +730,14 @@ function roleLabel(role: string) {
   return labels[role] || role;
 }
 
-function BudgetCompareRow({ label, value, pct, tone }: { label: string; value: number; pct: number; tone: "income" | "expense" }) {
+function BudgetCompareRow({ label, value, pct, tone, unit = "млрд ₽" }: { label: string; value: number; pct: number; tone: "income" | "expense"; unit?: string }) {
   const bar = tone === "income" ? "from-emerald-500 to-emerald-400/70" : "from-rose-500 to-rose-400/70";
   return (
     <div>
       <div className="mb-1 flex items-baseline justify-between gap-3">
         <span className="text-xs font-medium">{label}</span>
         <span className="shrink-0 text-xs font-semibold tabular-nums">
-          {value.toLocaleString("ru-RU")} <span className="text-[10px] font-medium text-muted-foreground">млрд ₽</span>
+          {value.toLocaleString("ru-RU")} <span className="text-[10px] font-medium text-muted-foreground">{unit}</span>
         </span>
       </div>
       <div className="h-3 overflow-hidden rounded-full bg-muted">
@@ -747,17 +747,64 @@ function BudgetCompareRow({ label, value, pct, tone }: { label: string; value: n
   );
 }
 
+// Извлекаем числовые доходы/расходы для пропорционального бара. Приоритет — структурные
+// поля totalIncomeValue/totalExpenseValue; если их нет, парсим строку totalBudget
+// (детерминированный фискальный контур вида «Доходы X млрд ₽; расходы Y млрд ₽; …»).
+// Числа не выдумываем: если распарсить не удалось — возвращаем undefined и остаётся текстовый фолбэк.
+function extractBudgetFigures(landscape: NonNullable<RegionAnalysisOutput["budgetLandscape"]>): {
+  income?: number;
+  expense?: number;
+  unit: string;
+} {
+  const defaultUnit = "млрд ₽";
+  if (hasNum(landscape.totalIncomeValue) || hasNum(landscape.totalExpenseValue)) {
+    return {
+      income: hasNum(landscape.totalIncomeValue) ? landscape.totalIncomeValue : undefined,
+      expense: hasNum(landscape.totalExpenseValue) ? landscape.totalExpenseValue : undefined,
+      unit: defaultUnit,
+    };
+  }
+  const text = landscape.totalBudget?.trim();
+  if (!text) return { unit: defaultUnit };
+  const income = parseRubValue(text, /доход/i);
+  const expense = parseRubValue(text, /расход/i);
+  return { income, expense, unit: defaultUnit };
+}
+
+// Достаёт число после ключевого слова (доход/расход), поддерживая ru-разделители
+// («552,2 млрд», «1 234,5 млрд», «566 млрд»). Возвращает undefined, если не нашли.
+function parseRubValue(text: string, keyword: RegExp): number | undefined {
+  const anchor = text.search(keyword);
+  if (anchor < 0) return undefined;
+  const tail = text.slice(anchor);
+  // Нормализуем разделители тысяч (пробелы, неразрывные пробелы) и берём первое
+  // число с денежной единицей: «552,2 млрд ₽», «1 234,5 млрд», «566 млрд».
+  const normalized = tail.replace(/[\u00a0\u202f\u2009]/g, " ");
+  const match = normalized.match(/(\d[\d\s.]*?)(?:,(\d+))?\s*(?:млрд|млн|трлн|₽|руб)/i);
+  if (!match) return undefined;
+  const intPart = match[1].replace(/[\s.]/g, "");
+  if (!intPart) return undefined;
+  const num = Number(match[2] ? `${intPart}.${match[2]}` : intPart);
+  return Number.isFinite(num) && num > 0 ? num : undefined;
+}
+
 function BudgetSection({ landscape }: { landscape: RegionAnalysisOutput["budgetLandscape"] }) {
   if (!landscape) return null;
-  const deficit = hasNum(landscape.totalIncomeValue) && hasNum(landscape.totalExpenseValue)
-    ? landscape.totalExpenseValue - landscape.totalIncomeValue
-    : undefined;
+  const figures = extractBudgetFigures(landscape);
+  const income = figures.income;
+  const expense = figures.expense;
+  const hasCompare = hasNum(income) && hasNum(expense);
+  const deficit = hasCompare ? expense - income : undefined;
+  // Строка вида «Доходы … ; расходы …» дублирует пропорциональный бар — не выводим её плоским текстом.
+  const totalBudgetText = landscape.totalBudget?.trim() ?? "";
+  const totalBudgetIsFiscalLine = /доход/i.test(totalBudgetText) && /расход/i.test(totalBudgetText);
+  const showTotalBudgetTile = Boolean(totalBudgetText) && !(hasCompare && totalBudgetIsFiscalLine);
   return (
     <Card className="rounded-2xl">
       <CardContent className="p-4 sm:p-5">
         <SectionHeader icon={Landmark} title="Бюджет и государственные программы" subtitle="Куда идут деньги региона" />
         <div className="mb-3 grid gap-2 sm:grid-cols-3">
-          {landscape.totalBudget && (
+          {showTotalBudgetTile && (
             <div className="flex items-start gap-2.5 rounded-xl border bg-muted/20 p-3">
               <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
                 <Landmark className="size-4" />
@@ -768,7 +815,7 @@ function BudgetSection({ landscape }: { landscape: RegionAnalysisOutput["budgetL
               </div>
             </div>
           )}
-          {hasNum(landscape.totalIncomeValue) && (
+          {hasNum(income) && (
             <div className="flex items-start gap-2.5 rounded-xl border border-emerald-500/20 bg-emerald-500/[0.05] p-3">
               <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-600 dark:text-emerald-400">
                 <TrendingUp className="size-4" />
@@ -776,8 +823,8 @@ function BudgetSection({ landscape }: { landscape: RegionAnalysisOutput["budgetL
               <div className="min-w-0">
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Доходы</p>
                 <p className="mt-0.5 text-lg font-bold leading-none tracking-tight tabular-nums">
-                  {landscape.totalIncomeValue.toLocaleString("ru-RU")}
-                  <span className="ml-1 text-xs font-medium text-muted-foreground">млрд ₽</span>
+                  {income.toLocaleString("ru-RU")}
+                  <span className="ml-1 text-xs font-medium text-muted-foreground">{figures.unit}</span>
                 </p>
               </div>
             </div>
@@ -791,26 +838,30 @@ function BudgetSection({ landscape }: { landscape: RegionAnalysisOutput["budgetL
                 <p className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">Дефицит</p>
                 <p className="mt-0.5 text-lg font-bold leading-none tracking-tight tabular-nums">
                   {deficit.toLocaleString("ru-RU")}
-                  <span className="ml-1 text-xs font-medium text-muted-foreground">млрд ₽</span>
+                  <span className="ml-1 text-xs font-medium text-muted-foreground">{figures.unit}</span>
                 </p>
               </div>
             </div>
           )}
         </div>
-        {hasNum(landscape.totalIncomeValue) && hasNum(landscape.totalExpenseValue) && (() => {
-          const inc = landscape.totalIncomeValue as number;
-          const exp = landscape.totalExpenseValue as number;
+        {hasCompare && (() => {
+          const inc = income as number;
+          const exp = expense as number;
           const max = Math.max(inc, exp, 1);
           const gap = inc - exp;
+          // Ширина сегмента пропорциональна значению относительно максимума из доходов/расходов.
+          // Клампим только нижнюю границу, чтобы бар оставался видимым, но масштаб реально отражал соотношение.
+          const incPct = Math.max(6, Math.min(100, Math.round((inc / max) * 100)));
+          const expPct = Math.max(6, Math.min(100, Math.round((exp / max) * 100)));
           return (
             <div className="mb-3 rounded-xl border bg-muted/10 p-3.5">
               <p className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Доходы и расходы</p>
               <div className="space-y-2.5">
-                <BudgetCompareRow label="Доходы" value={inc} pct={Math.max(6, Math.round((inc / max) * 100))} tone="income" />
-                <BudgetCompareRow label="Расходы" value={exp} pct={Math.max(6, Math.round((exp / max) * 100))} tone="expense" />
+                <BudgetCompareRow label="Доходы" value={inc} unit={figures.unit} pct={incPct} tone="income" />
+                <BudgetCompareRow label="Расходы" value={exp} unit={figures.unit} pct={expPct} tone="expense" />
               </div>
               <p className={`mt-3 inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-semibold ${gap >= 0 ? "bg-emerald-500/12 text-emerald-700 dark:text-emerald-400" : "bg-amber-500/12 text-amber-700 dark:text-amber-400"}`}>
-                {gap >= 0 ? "Профицит" : "Дефицит"} {Math.abs(gap).toLocaleString("ru-RU")} млрд ₽
+                {gap >= 0 ? "Профицит" : "Дефицит"} {Math.abs(gap).toLocaleString("ru-RU")} {figures.unit}
               </p>
             </div>
           );

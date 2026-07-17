@@ -81,15 +81,16 @@ export function SessionFocusBar({
               {quality.ready ? "Структура проверена" : `Требуется проверка · ${quality.score}`}
             </Badge>
           </div>
-          <p className="line-clamp-2 text-sm font-semibold leading-snug">{focus.headline}</p>
+          <p className="text-sm font-semibold leading-snug">{focus.headline}</p>
           {focus.nextAction && (
-            <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">
+            <p className="mt-1 text-xs leading-snug text-muted-foreground">
               Следующий ход: {focus.nextAction}
             </p>
           )}
         </div>
 
-        <div className="min-w-0 lg:max-w-full">
+        <div className="relative min-w-0 lg:max-w-full">
+          <div className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-gradient-to-l from-card to-transparent lg:hidden" />
           <div className="flex flex-nowrap gap-1.5 overflow-x-auto pb-1 lg:flex-wrap lg:justify-end lg:overflow-visible lg:pb-0">
             {sections.map((section) => (
               <a

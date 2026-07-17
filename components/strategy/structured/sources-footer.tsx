@@ -5,6 +5,12 @@ import { AlertCircle, CheckCircle2, ChevronDown, ChevronUp, ExternalLink, Shield
 import { Card, CardContent } from "@/components/ui/card";
 import type { DataGap, Source } from "@/lib/schemas/structured-output";
 
+// Единый форматтер нумерации источников для всех дашбордов.
+// Используем «№» — принятый в деловом русском символ порядкового номера.
+function sourceNumber(index: number): string {
+  return `№ ${index + 1}`;
+}
+
 // Руководителю показываем ТОЛЬКО источники — не список «что проверить».
 // hypotheses/dataGaps принимаем для совместимости вызовов, но не рендерим как задачи:
 // это внутренний сигнал системы для автодозапроса, а не домашка руководителя.
@@ -56,7 +62,7 @@ export function SourcesFooter({
         {previewSources.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-2">
             {previewSources.map((src, idx) => (
-              <SourceLink key={idx} src={src} />
+              <SourceLink key={idx} src={src} index={idx} />
             ))}
           </div>
         )}
@@ -72,8 +78,8 @@ export function SourcesFooter({
               ) : (
                 verified.map((src, idx) => (
                   <div key={idx} className="rounded-lg border bg-muted/20 px-2.5 py-2">
-                    <SourceTitle src={src} />
-                    <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{src.excerpt}</p>
+                    <SourceTitle src={src} index={idx} />
+                    <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground break-words">{src.excerpt}</p>
                   </div>
                 ))
               )}
@@ -86,8 +92,8 @@ export function SourcesFooter({
                 </p>
                 {unverified.map((src, idx) => (
                   <div key={`uv-${idx}`} className="rounded-lg border bg-muted/20 px-2.5 py-2">
-                    <SourceTitle src={src} />
-                    <p className="mt-0.5 text-[11px] text-muted-foreground">{src.excerpt}</p>
+                    <SourceTitle src={src} index={verified.length + idx} />
+                    <p className="mt-0.5 text-[11px] text-muted-foreground break-words">{src.excerpt}</p>
                   </div>
                 ))}
               </div>
@@ -99,9 +105,14 @@ export function SourcesFooter({
   );
 }
 
-function SourceLink({ src }: { src: Source }) {
+function SourceLink({ src, index }: { src: Source; index: number }) {
   if (!src.url) {
-    return <span className="rounded-full border px-2.5 py-1 text-[11px] font-medium">{src.title}</span>;
+    return (
+      <span className="inline-flex max-w-full items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium">
+        <span className="shrink-0 text-muted-foreground tabular-nums">{sourceNumber(index)}</span>
+        <span className="line-clamp-2 break-words">{src.title}</span>
+      </span>
+    );
   }
   return (
     <a
@@ -111,17 +122,25 @@ function SourceLink({ src }: { src: Source }) {
       className="inline-flex max-w-full items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-medium text-primary transition hover:bg-primary/5"
     >
       <ExternalLink className="size-3 shrink-0" />
-      <span className="truncate">{src.title}</span>
+      <span className="shrink-0 text-muted-foreground tabular-nums">{sourceNumber(index)}</span>
+      <span className="line-clamp-2 break-words">{src.title}</span>
     </a>
   );
 }
 
-function SourceTitle({ src }: { src: Source }) {
-  if (!src.url) return <p className="text-xs font-medium">{src.title}</p>;
+function SourceTitle({ src, index }: { src: Source; index: number }) {
+  if (!src.url) {
+    return (
+      <p className="text-xs font-medium break-words">
+        <span className="text-muted-foreground tabular-nums">{sourceNumber(index)}</span> {src.title}
+      </p>
+    );
+  }
   return (
     <a href={src.url} target="_blank" rel="noreferrer" className="inline-flex items-start gap-1 text-xs font-medium text-primary hover:underline">
       <ExternalLink className="mt-0.5 size-3 shrink-0" />
-      <span>{src.title}</span>
+      <span className="shrink-0 text-muted-foreground tabular-nums">{sourceNumber(index)}</span>
+      <span className="break-words">{src.title}</span>
     </a>
   );
 }

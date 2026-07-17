@@ -325,13 +325,17 @@ function EditableSection({
   if (!ctx?.sessionId) return <>{children}</>;
   return (
     <div ref={sectionRef} className="relative">
-      {showMarker && (
-        <div className="pointer-events-none absolute left-3 top-3 z-10 flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">
-          <Sparkles className="size-3" /> Обновлено
-        </div>
-      )}
-      <div className="pointer-events-none absolute right-3 top-3 z-10 flex justify-end">
-        <div className="pointer-events-auto rounded-xl border bg-card/90 p-1 shadow-sm backdrop-blur">
+      {/* Тулбар правок — отдельной строкой над блоком, чтобы не наезжать на
+          заголовок/подзаголовок секции (имя+роль ЛПР получают полную ширину). */}
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        {showMarker ? (
+          <span className="flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">
+            <Sparkles className="size-3" /> Обновлено
+          </span>
+        ) : (
+          <span aria-hidden />
+        )}
+        <div className="ml-auto rounded-xl border bg-card/90 p-1 shadow-sm backdrop-blur">
           <BlockActionsRow blockKind={blockKind} />
         </div>
       </div>

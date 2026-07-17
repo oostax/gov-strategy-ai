@@ -89,8 +89,8 @@ export function KpiStrip({
           </span>
           <div className="min-w-0">
             <p className="truncate text-lg font-bold leading-none tabular-nums">{tile.value}</p>
-            <p className="mt-1 truncate text-[11px] leading-tight text-muted-foreground">{tile.label}</p>
-            {tile.hint && <p className="truncate text-[10px] text-muted-foreground/80">{tile.hint}</p>}
+            <p className="mt-1 line-clamp-2 text-[11px] leading-tight text-muted-foreground">{tile.label}</p>
+            {tile.hint && <p className="line-clamp-2 text-[10px] leading-tight text-muted-foreground/80">{tile.hint}</p>}
           </div>
         </div>
       ))}

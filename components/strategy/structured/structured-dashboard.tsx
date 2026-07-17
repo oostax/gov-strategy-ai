@@ -60,6 +60,9 @@ export function StructuredDashboard({
 
   const data = output.data as StructuredOutput;
   const bets = data.bets ?? [];
+  const showEffortImpact = hasEffortImpact(bets);
+  // Матрица ставок отрисована, если рендерится любой из двух блоков ниже.
+  const betsMatrixShown = showEffortImpact || bets.length >= 2;
   return (
     <div className="space-y-5">
       <ExecutiveHints kind="strategy" />
@@ -94,12 +97,12 @@ export function StructuredDashboard({
       </div>
 
       <div className="animate-in fade-in slide-in-from-bottom-2 duration-500 delay-200">
-        {hasEffortImpact(bets) ? <BetsEffortImpact bets={bets} /> : <BetsDecisionMatrix bets={bets} />}
+        {showEffortImpact ? <BetsEffortImpact bets={bets} /> : <BetsDecisionMatrix bets={bets} />}
       </div>
 
       {/* Аналитический кластер: дополнительная инфографика рядом с матрицей выбора */}
       <div id="visuals" className="scroll-mt-56">
-        <VisualsSection visuals={data.visuals ?? []} />
+        <VisualsSection visuals={data.visuals ?? []} suppressMatrix={betsMatrixShown} />
       </div>
 
       {/* Роль Сбера — мост от выбора к исполнению */}

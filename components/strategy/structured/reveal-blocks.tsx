@@ -155,12 +155,14 @@ export function BlockBudget({ data }: { data: Pick<RegionAnalysisOutput, "budget
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Структура расходов</p>
           <div className="space-y-1.5">
             {expenses.slice(0, 6).map((item) => (
-              <div key={item.id} className="flex items-center gap-2">
-                <span className="w-24 shrink-0 truncate text-xs">{item.name}</span>
-                <div className="h-1.5 flex-1 rounded-full bg-muted overflow-hidden">
+              <div key={item.id}>
+                <div className="mb-1 flex items-baseline justify-between gap-2">
+                  <span className="min-w-0 text-xs leading-snug">{item.name}</span>
+                  <span className="shrink-0 text-right text-xs tabular-nums">{item.value.toLocaleString("ru-RU")} {item.unit || "млрд ₽"}</span>
+                </div>
+                <div className="h-1.5 rounded-full bg-muted overflow-hidden">
                   <div className="h-full rounded-full bg-emerald-500/70" style={{ width: `${Math.max(2, (item.value / maxVal) * 100)}%` }} />
                 </div>
-                <span className="w-20 shrink-0 text-right text-xs tabular-nums">{item.value.toLocaleString("ru-RU")} {item.unit || "млрд ₽"}</span>
               </div>
             ))}
           </div>

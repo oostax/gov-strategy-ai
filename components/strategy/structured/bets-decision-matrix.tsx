@@ -19,8 +19,9 @@ export function BetsDecisionMatrix({ bets }: { bets: StrategyBet[] }) {
     <Card className="rounded-2xl">
       <CardContent className="p-4">
         <h3 className="mb-3 text-sm font-semibold">Сравнение ставок</h3>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] border-separate border-spacing-0 text-sm">
+        <div className="relative">
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[720px] border-separate border-spacing-0 text-sm">
             <thead>
               <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
                 <th className="border-b px-3 py-2 font-semibold">Опция</th>
@@ -61,8 +62,11 @@ export function BetsDecisionMatrix({ bets }: { bets: StrategyBet[] }) {
                   <td className="border-b px-3 py-3 text-xs leading-snug">{bet.checkNeeded}</td>
                 </tr>
               ))}
-            </tbody>
-          </table>
+              </tbody>
+            </table>
+          </div>
+          {/* Ненавязчивый индикатор горизонтальной прокрутки на узких экранах */}
+          <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-card to-transparent sm:hidden" />
         </div>
       </CardContent>
     </Card>

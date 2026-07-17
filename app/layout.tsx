@@ -31,7 +31,7 @@ export default function RootLayout({
         <TooltipProvider>
           <OnboardingGate />
           {children}
-          <Toaster richColors position="top-right" />
+          <Toaster richColors />
         </TooltipProvider>
       </body>
     </html>

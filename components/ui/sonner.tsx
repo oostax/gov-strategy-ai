@@ -1,15 +1,30 @@
 "use client"
 
+import { useEffect, useState } from "react"
 import { useTheme } from "next-themes"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
 import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon, Loader2Icon } from "lucide-react"
 
-const Toaster = ({ ...props }: ToasterProps) => {
+const Toaster = ({ position, ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme()
+  // На мобайле верхний тост перекрывает шапку карточки — уводим его вниз по центру,
+  // на десктопе оставляем правый верхний угол. Позиция из пропа имеет приоритет.
+  const [isMobile, setIsMobile] = useState(false)
+  useEffect(() => {
+    const mql = window.matchMedia("(max-width: 639px)")
+    const sync = () => setIsMobile(mql.matches)
+    sync()
+    mql.addEventListener("change", sync)
+    return () => mql.removeEventListener("change", sync)
+  }, [])
+  const resolvedPosition = position ?? (isMobile ? "bottom-center" : "top-right")
 
   return (
     <Sonner
       theme={theme as ToasterProps["theme"]}
+      position={resolvedPosition}
+      offset={16}
+      mobileOffset={{ bottom: 16, left: 16, right: 16 }}
       className="toaster group"
       icons={{
         success: (

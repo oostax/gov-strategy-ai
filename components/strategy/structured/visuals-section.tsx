@@ -67,8 +67,18 @@ function formatValue(item: VisualItem): string {
   return showUnit ? `${formatNumber(n)} ${item.unit}` : formatNumber(n);
 }
 
-export function VisualsSection({ visuals }: { visuals: OutputVisual[] }) {
-  const useful = (visuals ?? []).filter(isUsefulVisual).slice(0, 4);
+export function VisualsSection({
+  visuals,
+  suppressMatrix = false,
+}: {
+  visuals: OutputVisual[];
+  /** Матрица ставок уже показана выше (bets-матрица) — не дублируем её здесь. */
+  suppressMatrix?: boolean;
+}) {
+  const useful = (visuals ?? [])
+    .filter(isUsefulVisual)
+    .filter((visual) => !(suppressMatrix && visual.type === "matrix"))
+    .slice(0, 4);
   if (!useful.length) return null;
 
   return (
@@ -226,7 +236,7 @@ function FunnelChart({ items }: { items: VisualItem[] }) {
               className="flex items-center justify-between gap-2 rounded-md bg-primary/85 px-3 py-2 text-primary-foreground transition-all"
               style={{ width: `${widthPct}%` }}
             >
-              <span className="truncate text-xs font-medium">{item.label}</span>
+              <span className="line-clamp-2 break-words text-xs font-medium">{item.label}</span>
               <span className="shrink-0 text-xs font-semibold tabular-nums">{formatValue(item)}</span>
             </div>
             {conv !== null && (
@@ -288,7 +298,7 @@ function BarVisual({ items }: { items: VisualItem[] }) {
         return (
           <div key={idx} className="grid gap-1.5">
             <div className="flex items-center justify-between gap-3">
-              <p className="truncate text-xs font-medium">{item.label}</p>
+              <p className="min-w-0 break-words text-xs font-medium">{item.label}</p>
               <p className="shrink-0 text-xs font-semibold tabular-nums">
                 {formatNumber(item.display)}{item.unit ? ` ${item.unit}` : ""}
               </p>
@@ -300,7 +310,7 @@ function BarVisual({ items }: { items: VisualItem[] }) {
               />
             </div>
             {item.description && (
-              <p className="line-clamp-1 text-[11px] text-muted-foreground">{item.description}</p>
+              <p className="text-[11px] leading-snug text-muted-foreground">{item.description}</p>
             )}
           </div>
         );
