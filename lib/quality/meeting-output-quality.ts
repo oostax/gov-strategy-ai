@@ -272,6 +272,17 @@ export function stripUnsupportedNumericClauses(text: string, evidence: string): 
   return kept.join(" ").trim();
 }
 
+export function sanitizeNegotiationCommitments(text: string): string {
+  return text
+    .replace(/в\s+(?:одном\s+)?муниципалитете\s*[—–-]\s*[А-ЯЁ][А-Яа-яЁё-]+/gu, "в согласованной пилотной зоне")
+    .replace(/в\s+муниципалитете\s+[А-ЯЁ][А-Яа-яЁё-]+/gu, "в согласованной пилотной зоне")
+    .replace(/куратором\s+назначаем[^.]+\.?/giu, "Куратора проекта определяет заказчик. ")
+    .replace(/без\s+дополнительных\s+капитальных\s+вложений,?/giu, "")
+    .replace(/\s+([,.])/g, "$1")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 export function stripDecorativeSymbols(text: string): string {
   return text
     .replace(/[0-9#*]?\uFE0F?\u20E3/gu, "")

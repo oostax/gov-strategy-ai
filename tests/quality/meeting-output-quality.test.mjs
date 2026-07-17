@@ -9,6 +9,7 @@ import {
   deriveFiscalStance,
   hasSupportedFiscalStance,
   normalizeFactualProse,
+  sanitizeNegotiationCommitments,
   stripDecorativeSymbols,
   stripUnsupportedHighRiskClauses,
   stripUnsupportedNamedParentheticals,
@@ -66,6 +67,15 @@ test("бюджетная позиция требует прямого подтв
 
 test("деловой текст очищается от декоративных эмодзи", () => {
   assert.equal(stripDecorativeSymbols("1️⃣ GigaChat → 2️⃣ SberCloud"), "GigaChat → SberCloud");
+});
+
+test("оффер не назначает пилотную зону и куратора за заказчика", () => {
+  const result = sanitizeNegotiationCommitments(
+    "Запускаем пилот в одном муниципалитете – Казани, без дополнительных капитальных вложений. Куратором назначаем заместителя Премьер-министра.",
+  );
+  assert.equal(result.includes("Казани"), false);
+  assert.equal(result.includes("без дополнительных"), false);
+  assert.equal(result.includes("Куратора проекта определяет заказчик"), true);
 });
 
 test("фактический текст не сохраняет неподтверждённое имя и обрывки", () => {

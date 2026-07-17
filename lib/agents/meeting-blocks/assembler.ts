@@ -15,6 +15,7 @@ import {
   assessMeetingOutput,
   isCompleteAgendaItem,
   isCompleteSberAction,
+  sanitizeNegotiationCommitments,
   stripDecorativeSymbols,
   stripUnsupportedHighRiskClauses,
 } from "@/lib/quality/meeting-output-quality";
@@ -143,7 +144,10 @@ function sanitizeExecutiveClaims(data: MeetingOutput): MeetingOutput {
         : "Ожидаемый эффект пилота необходимо подтвердить на исходной базе заказчика.";
   }
   if (data.proposal) {
-    const safeProposal = stripUnsupportedHighRiskClauses(stripDecorativeSymbols(data.proposal), evidence);
+    const safeProposal = stripUnsupportedHighRiskClauses(
+      sanitizeNegotiationCommitments(stripDecorativeSymbols(data.proposal)),
+      evidence,
+    );
     data.proposal =
       safeProposal && !/\d[\d\s.,-]*\s*(?:муниципал|регион|недел|месяц|дн(?:я|ей)?|обращен)/iu.test(safeProposal)
         ? safeProposal

@@ -356,7 +356,9 @@ async function continueMeetingBlocks(
       `Synthesis timeout after ${synthesisTimeoutMs}ms`,
     );
     if (header.mainThesis) assembled.mainThesis = header.mainThesis;
-    if (header.meetingGoal) assembled.meetingGoal = header.meetingGoal;
+    if (header.meetingGoal && !session.meetingGoal?.trim()) {
+      assembled.meetingGoal = header.meetingGoal;
+    }
     if (header.proposal && !assembled.proposal) assembled.proposal = header.proposal;
   } catch (err) {
     console.warn("[meeting-blocks][synthesis] skipped", err);
