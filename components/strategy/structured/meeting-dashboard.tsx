@@ -758,35 +758,46 @@ function AgendaSection({ agenda }: { agenda: MeetingOutput["agenda"] }) {
             : `Заполнено ${quality.complete} из ${quality.total} · требуется пересборка`}
           count={agenda.length}
         />
-        {/* На узких экранах — горизонтальный скролл; ничего не перекрывается */}
-        <div className="-mx-1 overflow-x-auto px-1">
-          <div className="min-w-[720px] overflow-hidden rounded-xl border">
-            {agenda.map((block, idx) => (
-              <div
-                key={block.id ?? idx}
-                className={`grid grid-cols-[84px_1.3fr_1.3fr_1.3fr_1fr] ${idx > 0 ? "border-t" : ""}`}
-              >
-                <div className="border-r p-3">
-                  <Badge variant="secondary" className="font-mono text-[11px]">
-                    {block.time}
-                  </Badge>
-                </div>
-                <AgendaCell label="Тема" value={block.topic} />
-                <AgendaCell label="Сбер говорит" value={block.sberSays} />
-                <AgendaCell label="Спрашиваем ЛПР" value={block.askLpr} />
-                <AgendaCell label="Фиксируем" value={block.fixDecision} fix />
+        {/* Mobile: каждый блок — вертикальная карточка (без обрезки по ширине).
+            sm+/lg+: табличный грид с колонками, как раньше. */}
+        <div className="overflow-hidden rounded-xl border">
+          {agenda.map((block, idx) => (
+            <div
+              key={block.id ?? idx}
+              className={`flex flex-col sm:grid sm:grid-cols-[84px_1.3fr_1.3fr_1.3fr_1fr] ${idx > 0 ? "border-t" : ""}`}
+            >
+              <div className="border-b p-3 sm:border-r sm:border-b-0">
+                <Badge variant="secondary" className="font-mono text-[11px]">
+                  {block.time}
+                </Badge>
               </div>
-            ))}
-          </div>
+              <AgendaCell label="Тема" value={block.topic} />
+              <AgendaCell label="Сбер говорит" value={block.sberSays} />
+              <AgendaCell label="Спрашиваем ЛПР" value={block.askLpr} />
+              <AgendaCell label="Фиксируем" value={block.fixDecision} fix last />
+            </div>
+          ))}
         </div>
       </CardContent>
     </Card>
   );
 }
 
-function AgendaCell({ label, value, fix }: { label: string; value: string; fix?: boolean }) {
+function AgendaCell({
+  label,
+  value,
+  fix,
+  last,
+}: {
+  label: string;
+  value: string;
+  fix?: boolean;
+  last?: boolean;
+}) {
   return (
-    <div className={`border-r p-3 last:border-r-0 ${fix ? "bg-primary/[0.04]" : ""}`}>
+    <div
+      className={`p-3 sm:border-r sm:border-b-0 ${last ? "sm:border-r-0" : "border-b sm:border-b-0"} ${fix ? "bg-primary/[0.04]" : ""}`}
+    >
       <p className={`mb-1 text-[10px] font-semibold uppercase tracking-wide ${fix ? "text-primary/80" : "text-muted-foreground"}`}>
         {label}
       </p>
